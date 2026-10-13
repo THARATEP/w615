@@ -3,18 +3,40 @@
   "short_name": "BOQ ว651",
   "description": "คำนวณปรับลดราคาในแบบแสดงรายการ ปริมาณงาน และราคา (BOQ) ตามหนังสือ กวจ. ว 651 พร้อมรายงานแบบสรุปราคากลางและเอกสารแนบท้ายสัญญา ใช้งานออฟไลน์ได้",
   "lang": "th",
-  "id": "./",
-  "start_url": "./",
-  "scope": "./",
+  "id": "/w615/",
+  "start_url": "/w615/",
+  "scope": "/w615/",
   "display": "standalone",
-  "display_override": ["window-controls-overlay", "standalone"],
+  "display_override": [
+    "window-controls-overlay",
+    "standalone"
+  ],
   "orientation": "any",
   "background_color": "#F4F6F5",
   "theme_color": "#0D3B27",
-  "categories": ["business", "productivity", "utilities"],
+  "categories": [
+    "business",
+    "productivity",
+    "utilities"
+  ],
   "icons": [
-    {"src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
-    {"src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
-    {"src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
   ]
 }
