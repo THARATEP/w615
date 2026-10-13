@@ -4,7 +4,7 @@
  * ด่วนที่สุด ที่ กค (กวจ) 0405.3/ว 651 ลงวันที่ 26 กันยายน 2568
  *
  * Backend : Google Apps Script + Google Sheets
- * ผู้พัฒนา : กลุ่มงานช่างและแผนที่ ส.ป.ก.จันทบุรี
+ * Create by Mr.Tharatep Thongbao
  */
 
 var APP = {

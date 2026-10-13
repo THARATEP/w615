@@ -158,5 +158,4 @@ npm run serve    # เปิดทดสอบ PWA ที่ http://localhost:80
 
 ---
 
-กลุ่มงานช่างและแผนที่ · สำนักงานการปฏิรูปที่ดินเพื่อเกษตรกรรมจังหวัดจันทบุรี
 **Create by Mr.Tharatep Thongbao** · MIT License
