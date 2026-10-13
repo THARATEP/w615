@@ -42,7 +42,7 @@ swap('<!--PWA_HEAD-->', `<meta name="description" content="คำนวณปร
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="BOQ ว651">
-  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="manifest" href="manifest.json">
   <link rel="icon" href="icons/favicon.ico" sizes="any">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">`);

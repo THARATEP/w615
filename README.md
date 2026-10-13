@@ -136,7 +136,7 @@ npm run deploy                        # สร้างเวอร์ชัน�
 │   └─ Engine.gs, EngineJs.html   ← สร้างจาก lib/engine.js
 ├─ web/                   PWA ที่เผยแพร่บน GitHub Pages
 │   ├─ index.html, sw.js  ← สร้างโดย tools/build.mjs
-│   ├─ manifest.webmanifest, icons/, fonts/, vendor/
+│   ├─ manifest.json, icons/, fonts/, vendor/
 ├─ tools/build.mjs        สคริปต์ build (Node 18+ ไม่ต้องติดตั้งแพ็กเกจเพิ่ม)
 └─ tests/engine.test.mjs  ทดสอบกับตัวอย่างในหนังสือ ว 651
 ```
