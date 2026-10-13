@@ -3,9 +3,9 @@
   "short_name": "BOQ ว651",
   "description": "คำนวณปรับลดราคาในแบบแสดงรายการ ปริมาณงาน และราคา (BOQ) ตามหนังสือ กวจ. ว 651 พร้อมรายงานแบบสรุปราคากลางและเอกสารแนบท้ายสัญญา ใช้งานออฟไลน์ได้",
   "lang": "th",
-  "id": "/w615/",
-  "start_url": "/w615/",
-  "scope": "/w615/",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "display_override": [
     "window-controls-overlay",
