@@ -762,16 +762,26 @@ function resetLocal() {
 function setupInstall() {
   var btn = $('#btnInstall'); if (!btn || IS_GAS) return;
   var standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
-  if (standalone) return;
+  if (standalone || location.protocol === 'file:') return;
   var deferred = null;
-  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferred = e; btn.classList.remove('d-none'); });
+  btn.classList.remove('d-none'); // แสดงเสมอ — ถ้าเบราว์เซอร์พร้อมจะเปิดหน้าต่างติดตั้ง ไม่พร้อมจะแสดงวิธีติดตั้ง
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferred = e; btn.classList.add('btn-pulse'); });
   window.addEventListener('appinstalled', function () { btn.classList.add('d-none'); toast('ติดตั้งแอปเรียบร้อย เปิดได้จากหน้าจอหลัก/เมนูโปรแกรม'); });
-  var isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
-  if (isIOS && 'serviceWorker' in navigator) btn.classList.remove('d-none');
   btn.addEventListener('click', function () {
-    if (deferred) { deferred.prompt(); deferred.userChoice.then(function () { deferred = null; btn.classList.add('d-none'); }); return; }
-    Swal.fire({ icon: 'info', title: 'ติดตั้งบน iPhone / iPad', confirmButtonColor: '#16603f',
-      html: 'เปิดหน้านี้ใน <b>Safari</b> แล้วแตะปุ่ม <b>แชร์</b> <i class="bi bi-box-arrow-up"></i><br>เลือก <b>"เพิ่มไปยังหน้าจอโฮม"</b> (Add to Home Screen)' });
+    if (deferred) { deferred.prompt(); deferred.userChoice.then(function (c) { deferred = null; if (c.outcome === 'accepted') btn.classList.add('d-none'); }); return; }
+    var ua = navigator.userAgent;
+    var isIOS = /iphone|ipad|ipod/i.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    var isEdge = /Edg\//.test(ua), isAndroid = /Android/i.test(ua), isFirefox = /Firefox/i.test(ua);
+    var isSafariMac = /Safari/.test(ua) && !/Chrome|Chromium|Edg/.test(ua) && !isIOS;
+    var html;
+    if (isIOS) html = 'เปิดหน้านี้ใน <b>Safari</b> แล้วแตะปุ่ม <b>แชร์</b> <i class="bi bi-box-arrow-up"></i><br>เลือก <b>"เพิ่มไปยังหน้าจอโฮม"</b>';
+    else if (isAndroid) html = 'แตะเมนู <b>⋮</b> มุมขวาบนของ Chrome<br>เลือก <b>"ติดตั้งแอป"</b> หรือ <b>"เพิ่มลงในหน้าจอหลัก"</b>';
+    else if (isEdge) html = 'คลิกเมนู <b>…</b> มุมขวาบน → <b>แอป</b> → <b>"ติดตั้งไซต์นี้เป็นแอป"</b><br>หรือคลิกไอคอน <i class="bi bi-plus-square"></i> ท้ายช่อง URL';
+    else if (isSafariMac) html = 'ที่เมนู <b>ไฟล์ (File)</b> เลือก <b>"เพิ่มไปยัง Dock" (Add to Dock)</b>';
+    else if (isFirefox) html = 'Firefox บนคอมพิวเตอร์ยังไม่รองรับการติดตั้งแอป<br>กรุณาเปิดลิงก์นี้ด้วย <b>Chrome</b> หรือ <b>Edge</b>';
+    else html = 'คลิกไอคอน <i class="bi bi-display"></i><i class="bi bi-arrow-down-short"></i> <b>ติดตั้ง</b> ท้ายช่อง URL<br>หรือเมนู <b>⋮</b> → <b>"แคสต์ บันทึก และแชร์"</b> → <b>"ติดตั้งหน้าเว็บเป็นแอป..."</b>' +
+      '<div class="small text-muted mt-2">ถ้ายังไม่พบ ให้คลิกใช้งานหน้านี้สักครู่ แล้วกดปุ่มนี้อีกครั้ง หรือแอปอาจติดตั้งไว้แล้ว (ดูที่ chrome://apps)</div>';
+    Swal.fire({ icon: 'info', title: 'ติดตั้งแอปลงเครื่อง', html: html, confirmButtonText: 'เข้าใจแล้ว', confirmButtonColor: '#16603f' });
   });
 }
 </script>
