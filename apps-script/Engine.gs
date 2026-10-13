@@ -1,0 +1,126 @@
+/* Shared calculation engine (server) – generated from lib/engine.js, do not edit */
+/* BOQ price-adjustment engine per กค (กวจ) 0405.3/ว 651 (26 ก.ย. 2568) */
+var BoqEngine = (function () {
+  function r2(x) { return Math.round((x + (x >= 0 ? 1e-9 : -1e-9)) * 100) / 100; }
+  function t2(x) { return (x >= 0 ? Math.floor(x * 100 + 1e-6) : -Math.floor(-x * 100 + 1e-6)) / 100; }
+  function toS(x) { return Math.round(x * 100); } // satang
+  /**
+   * p: {offer, markupPct, pctMode:'trunc'|'round'|'exact', residualId (optional)}
+   * sections: [{code,name,kind:'construction'|'equipment'|'special',factor}]
+   * items: [{id,section,type:'ITEM'|'H1'|'H2',no,name,unit,qty,cost}]
+   */
+  function compute(p, sections, items) {
+    var secMap = {}; sections.forEach(function (s) { secMap[s.code] = s; });
+    var mk = Number(p.markupPct) || 0;
+    var rows = items.map(function (it) {
+      var r = Object.assign({}, it);
+      if (it.type !== 'ITEM') return r;
+      var s = secMap[it.section] || { factor: 1, kind: 'construction' };
+      r.qty = Number(it.qty) || 0; r.cost = Number(it.cost) || 0;
+      r.factor = Number(s.factor) || 1; r.kind = s.kind;
+      r.midRaw = r.cost * r.factor; r.mid = r2(r.midRaw);
+      r.baseRaw = mk ? r.midRaw * (1 + mk / 100) : r.midRaw; r.midPlus = r2(r.baseRaw);
+      r.base = r.midPlus;
+      return r;
+    });
+    var its = rows.filter(function (r) { return r.type === 'ITEM'; });
+    var S = function (arr, f) { return arr.reduce(function (a, r) { return a + toS(r[f]); }, 0) / 100; };
+    var excel = p.rawBase !== false; // default: full precision like Excel (ตรงกับตัวอย่าง กวจ.)
+    var SR = function (arr, f, fr) { return excel ? r2(arr.reduce(function (a, r) { return a + r[fr]; }, 0)) : S(arr, f); };
+    var total = SR(its, 'base', 'baseRaw'), totalMid = SR(its, 'mid', 'midRaw'), totalCost = S(its, 'cost');
+    var spec = its.filter(function (r) { return r.kind === 'special'; });
+    var adjItems = its.filter(function (r) { return r.kind !== 'special'; });
+    var special = SR(spec, 'base', 'baseRaw');
+    var offer = Number(p.offer) || 0;
+    var P1 = r2(total - special), P2 = r2(offer - special), P3 = r2(P1 - P2);
+    var rawPct = P1 ? P3 / P1 * 100 : 0;
+    var pct = p.pctMode === 'round' ? r2(rawPct) : p.pctMode === 'exact' ? rawPct : t2(rawPct);
+    var factor = 1 - pct / 100;
+    spec.forEach(function (r) { r.adj = r.base; });
+    adjItems.forEach(function (r) { var v = (excel ? r.baseRaw : r.base) * factor; r.adj = p.adjRound === "round" ? r2(v) : t2(v); });
+    var sumAdj = S(adjItems, 'adj');
+    var residual = r2(P2 - sumAdj);
+    var target = null;
+    if (p.residualId) target = adjItems.filter(function (r) { return String(r.id) === String(p.residualId); })[0];
+    if (!target) adjItems.forEach(function (r) { if (!target || r.base > target.base) target = r; });
+    if (target) { target.adj = r2(target.adj + residual); target.residual = residual; }
+    its.forEach(function (r) { r.unitAdj = r.qty ? (p.adjRound === "round" ? r2(r.adj / r.qty) : t2(r.adj / r.qty)) : r.adj; });
+    // subtotals: H1 -> until next H1 or section change; section totals
+    var secTotals = {};
+    sections.forEach(function (s) { secTotals[s.code] = { cost: 0, mid: 0, midPlus: 0, adj: 0 }; });
+    var cur = null;
+    var RK = { cost: 'cost', mid: excel ? 'midRaw' : 'mid', midPlus: excel ? 'baseRaw' : 'midPlus', adj: 'adj' };
+    rows.forEach(function (r) {
+      if (r.type === 'H1') { cur = r; r.sub = { cost: 0, mid: 0, midPlus: 0, adj: 0 }; return; }
+      if (cur && cur.section !== r.section) cur = null;
+      if (r.type !== 'ITEM') return;
+      ['cost', 'mid', 'midPlus', 'adj'].forEach(function (k) {
+        if (cur) cur.sub[k] += r[RK[k]];
+        if (secTotals[r.section]) secTotals[r.section][k] += r[RK[k]];
+      });
+    });
+    rows.forEach(function (r) { if (r.sub) Object.keys(r.sub).forEach(function (k) { r.sub[k] = r2(r.sub[k]); }); });
+    Object.keys(secTotals).forEach(function (c) { Object.keys(secTotals[c]).forEach(function (k) { secTotals[c][k] = r2(secTotals[c][k]); }); });
+    var sumAll = S(its, 'adj');
+    var checks = [];
+    checks.push({ ok: Math.abs(sumAll - offer) < 0.005, msg: 'ผลรวมราคาที่ปรับลด = ราคาตามคำเสนอ (' + fmt(sumAll) + ')' });
+    checks.push({ ok: spec.every(function (r) { return r.adj === r.base; }), msg: 'ไม่นำค่าใช้จ่ายพิเศษตามข้อกำหนดมาปรับลด' });
+    checks.push({ ok: its.every(function (r) { return r.adj >= 0; }), msg: 'ไม่มีรายการติดลบ' });
+    return { rows: rows, total: total, totalMid: totalMid, totalCost: totalCost, special: special, offer: offer,
+      P1: P1, P2: P2, P3: P3, rawPct: rawPct, pct: pct, factor: factor, residual: residual,
+      target: target, secTotals: secTotals, sumAdj: sumAll, checks: checks, markupPct: mk };
+  }
+
+  function fmt(n, d) {
+    if (n === '' || n === null || n === undefined || isNaN(n)) return '';
+    d = d === undefined ? 2 : d;
+    var neg = n < 0; n = Math.abs(Number(n));
+    var s = n.toFixed(d).split('.');
+    s[0] = s[0].replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    return (neg ? '-' : '') + s.join('.');
+  }
+  var TH_M = ['มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน', 'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'];
+  function thaiDate(s) {
+    if (!s) return '';
+    var m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return String(s);
+    return Number(m[3]) + ' ' + TH_M[Number(m[2]) - 1] + ' ' + (Number(m[1]) + 543);
+  }
+  function bahtText(num) {
+    num = Math.round((Number(num) || 0) * 100) / 100;
+    var neg = num < 0; num = Math.abs(num);
+    var dg = ['ศูนย์', 'หนึ่ง', 'สอง', 'สาม', 'สี่', 'ห้า', 'หก', 'เจ็ด', 'แปด', 'เก้า'];
+    var un = ['', 'สิบ', 'ร้อย', 'พัน', 'หมื่น', 'แสน'];
+    function six(str) {
+      var out = '';
+      for (var i = 0; i < str.length; i++) {
+        var d = Number(str[i]), pos = str.length - i - 1;
+        if (d === 0) continue;
+        if (pos === 1 && d === 1) out += 'สิบ';
+        else if (pos === 1 && d === 2) out += 'ยี่สิบ';
+        else if (pos === 0 && d === 1 && str.length > 1 && /[1-9]/.test(str.slice(0, -1))) out += 'เอ็ด';
+        else out += dg[d] + un[pos];
+      }
+      return out;
+    }
+    function read(n) {
+      var s = String(n), out = '';
+      var groups = [];
+      while (s.length > 6) { groups.unshift(s.slice(-6)); s = s.slice(0, -6); }
+      groups.unshift(s);
+      groups.forEach(function (g, i) {
+        var t = six(String(Number(g)));
+        if (i > 0 && Number(g) === 1 && out) t = 'เอ็ด';
+        out += t + (i < groups.length - 1 ? 'ล้าน' : '');
+      });
+      return out;
+    }
+    var baht = Math.floor(num + 1e-9), st = Math.round((num - baht) * 100);
+    var t = (neg ? 'ลบ' : '');
+    if (baht > 0) t += read(baht) + 'บาท';
+    if (st > 0) t += read(st) + 'สตางค์'; else t += baht > 0 ? 'ถ้วน' : 'ศูนย์บาทถ้วน';
+    return t;
+  }
+  return { compute: compute, r2: r2, t2: t2, fmt: fmt, thaiDate: thaiDate, bahtText: bahtText };
+})();
+if (typeof module !== 'undefined') module.exports = BoqEngine;

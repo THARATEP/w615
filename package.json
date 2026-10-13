@@ -1,0 +1,17 @@
+{
+  "name": "boq-w651",
+  "version": "1.1.0",
+  "description": "ระบบปรับลดราคาในแบบแสดงรายการ ปริมาณงาน และราคา (BOQ) ตามหนังสือ กวจ. ว 651 — Google Apps Script + PWA",
+  "private": true,
+  "type": "module",
+  "author": "Mr.Tharatep Thongbao",
+  "license": "MIT",
+  "scripts": {
+    "build": "node tools/build.mjs",
+    "test": "node --test tests/engine.test.mjs",
+    "serve": "npx --yes http-server web -p 8080 -c-1",
+    "push": "npm run build && npx --yes @google/clasp push",
+    "deploy": "npm run push && npx --yes @google/clasp deploy --description \"v$npm_package_version\""
+  },
+  "engines": { "node": ">=18" }
+}

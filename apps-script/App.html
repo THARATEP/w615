@@ -1,0 +1,777 @@
+<script>
+/* =====================================================================
+ *  Client app – ระบบปรับลดราคา BOQ ตาม ว 651
+ * ===================================================================== */
+var E = BoqEngine, F = E.fmt;
+var S = { user: '', settings: {}, projects: [], cur: null, dirty: false, res: null, tab: 'dash' };
+
+/* ---------------------- API bridge (Apps Script / local demo) ---------------------- */
+var IS_GAS = typeof google !== 'undefined' && google.script && google.script.run;
+function api(fn) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  if (IS_GAS) {
+    return new Promise(function (ok, bad) {
+      var r = google.script.run.withSuccessHandler(ok).withFailureHandler(function (e) { bad(e && e.message ? e : new Error(String(e))); });
+      r[fn].apply(r, args);
+    });
+  }
+  return new Promise(function (ok, bad) { setTimeout(function () { try { ok(LocalApi[fn].apply(null, args)); } catch (e) { bad(e); } }, 120); });
+}
+
+/* Local demo backend (ใช้เมื่อเปิดไฟล์นอก Apps Script เท่านั้น) */
+var LocalApi = (function () {
+  var mem = null, KEY = 'boq651_demo_v1';
+  function load() {
+    if (mem) return mem;
+    try { mem = JSON.parse(localStorage.getItem(KEY) || 'null'); } catch (e) { mem = null; }
+    if (!mem) {
+      mem = { settings: { orgName: 'สำนักงานการปฏิรูปที่ดินเพื่อเกษตรกรรมจังหวัดจันทบุรี', orgShort: 'ส.ป.ก.จันทบุรี', officerName: '', officerPosition: '', checkerName: '', checkerPosition: '', headName: '', headPosition: 'ปฏิรูปที่ดินจังหวัดจันทบุรี' }, projects: {} };
+      ['building', 'south', 'road'].forEach(function (k, i) {
+        var d = BOQ_SAMPLES[k](); d.project.id = 'DEMO' + (i + 1);
+        d.items.forEach(function (it, j) { it.id = 'd' + i + '_' + j; });
+        d.project.updatedAt = '2568-09-2' + (6 - i) + ' 10:0' + i; mem.projects[d.project.id] = d;
+      });
+    }
+    return mem;
+  }
+  function save() { try { localStorage.setItem(KEY, JSON.stringify(mem)); } catch (e) { /* storage blocked – keep in memory */ } }
+  function list() {
+    var m = load();
+    return Object.keys(m.projects).map(function (id) {
+      var d = m.projects[id], p = d.project, r = E.compute(p, p.sections, d.items);
+      return { id: id, name: p.name, workType: p.workType, projectNo: p.projectNo, agency: p.agency, budget: +p.budget || 0, offer: +p.offer || 0,
+        contractor: p.contractor, contractNo: p.contractNo, status: p.status, midPrice: r.total, contractPrice: r.sumAdj, pct: r.pct, updatedAt: p.updatedAt || '', updatedBy: 'demo' };
+    }).sort(function (a, b) { return String(b.updatedAt).localeCompare(String(a.updatedAt)); });
+  }
+  function now() { var d = new Date(); return (d.getFullYear() + 543) + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2) + ' ' + d.toTimeString().slice(0, 5); }
+  return {
+    apiInit: function () { var m = load(); return { user: 'โหมดออฟไลน์ · ข้อมูลอยู่ในเครื่องนี้', settings: m.settings, projects: list(), dbUrl: '', version: (window.APP_VERSION || '1.0.0') + ' (PWA)' }; },
+    apiExportAll: function () { var m = load(); return { app: 'boq-w651', format: 1, exportedAt: new Date().toISOString(), settings: m.settings, projects: m.projects }; },
+    apiImportAll: function (d) {
+      if (!d || d.app !== 'boq-w651' || typeof d.projects !== 'object') throw new Error('ไฟล์นี้ไม่ใช่ไฟล์สำรองของระบบปรับลดราคา BOQ');
+      mem = { settings: d.settings || load().settings, projects: d.projects }; save(); return list();
+    },
+    apiResetAll: function () { var s = load().settings; mem = { settings: s, projects: {} }; save(); return list(); },
+    apiListProjects: list,
+    apiGetProject: function (id) { return JSON.parse(JSON.stringify(load().projects[id])); },
+    apiSaveProject: function (d) {
+      var m = load(); d = JSON.parse(JSON.stringify(d));
+      if (!d.project.id) d.project.id = 'L' + Date.now();
+      d.project.updatedAt = now(); m.projects[d.project.id] = d; save();
+      return { id: d.project.id, projects: list(), updatedAt: d.project.updatedAt };
+    },
+    apiDeleteProject: function (id) { var m = load(); delete m.projects[id]; save(); return list(); },
+    apiDuplicateProject: function (id) {
+      var d = JSON.parse(JSON.stringify(load().projects[id])); d.project.id = ''; d.project.name += ' (สำเนา)'; d.project.contractNo = '';
+      return LocalApi.apiSaveProject(d);
+    },
+    apiSaveSettings: function (s) { var m = load(); Object.assign(m.settings, s); save(); return m.settings; },
+    apiExportReport: function () { throw new Error('การส่งออกไป Google Drive ใช้ได้เมื่อติดตั้งบน Google Apps Script เท่านั้น — ในโหมดสาธิตให้ใช้ปุ่ม "พิมพ์ / บันทึก PDF"'); }
+  };
+})();
+
+/* ---------------------- UI helpers ---------------------- */
+function $(s, r) { return (r || document).querySelector(s); }
+function $$(s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); }
+function esc(s) { return String(s === undefined || s === null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+function num(v) { if (v === '' || v === null || v === undefined) return ''; var n = Number(String(v).replace(/,/g, '')); return isNaN(n) ? '' : n; }
+function uid() { return 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+function loading(on) { $('#loader').classList.toggle('hide', !on); }
+function toast(msg, type) {
+  var el = document.createElement('div');
+  el.className = 'toast align-items-center text-bg-' + (type || 'success') + ' border-0';
+  el.innerHTML = '<div class="d-flex"><div class="toast-body">' + msg + '</div><button class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div>';
+  $('#toasts').appendChild(el); var t = new bootstrap.Toast(el, { delay: 3200 }); t.show();
+  el.addEventListener('hidden.bs.toast', function () { el.remove(); });
+}
+function fail(e) { loading(false); Swal.fire({ icon: 'error', title: 'เกิดข้อผิดพลาด', text: e && e.message ? e.message : String(e), confirmButtonColor: '#16603f' }); }
+function confirmBox(title, text, danger) {
+  return Swal.fire({ icon: danger ? 'warning' : 'question', title: title, text: text, showCancelButton: true, confirmButtonText: 'ยืนยัน', cancelButtonText: 'ยกเลิก', confirmButtonColor: danger ? '#b02a37' : '#16603f' }).then(function (r) { return r.isConfirmed; });
+}
+function kindLabel(k) { return { construction: 'งานก่อสร้าง (Factor F)', equipment: 'ครุภัณฑ์จัดซื้อ (VAT)', special: 'ค่าใช้จ่ายพิเศษตามข้อกำหนด' }[k] || k; }
+
+/* ---------------------- Tabs ---------------------- */
+function showTab(t) {
+  if ((t === 'calc' || t === 'report') && !S.cur) { toast('กรุณาเลือกหรือสร้างโครงการก่อน', 'warning'); t = 'dash'; }
+  S.tab = t;
+  $$('#mainNav .nav-link').forEach(function (a) { a.classList.toggle('active', a.getAttribute('data-tab') === t); });
+  $$('.tab-pane-x').forEach(function (s) { s.classList.toggle('d-none', s.id !== 'tab-' + t); });
+  if (t === 'dash') renderDash();
+  if (t === 'calc') renderCalc();
+  if (t === 'report') renderReport();
+  if (t === 'settings') renderSettings();
+  window.scrollTo(0, 0);
+}
+
+/* ---------------------- Init ---------------------- */
+document.addEventListener('DOMContentLoaded', function () {
+  bindStatic();
+  api('apiInit').then(function (d) {
+    S.user = d.user; S.settings = d.settings; S.projects = d.projects; S.dbUrl = d.dbUrl; S.version = d.version;
+    $('#userEmail').textContent = d.user; $('#orgShort').textContent = d.settings.orgShort || '';
+    loading(false); showTab('dash');
+    if (location.hash === '#new') { newProject(); try { history.replaceState(null, '', location.pathname); } catch (e) { /* ignore */ } }
+    $$('.gas-only').forEach(function (el) { el.classList.toggle('d-none', !IS_GAS); });
+    $$('.local-only').forEach(function (el) { el.classList.toggle('d-none', IS_GAS); });
+    if (!IS_GAS) { var seen = false; try { seen = localStorage.getItem('boq651_hint') === '1'; localStorage.setItem('boq651_hint', '1'); } catch (e) { /* ignore */ }
+      if (!seen) toast('โหมดออฟไลน์: ข้อมูลเก็บในเครื่องนี้ — สำรองข้อมูลได้ที่แท็บ "ตั้งค่า"', 'info'); }
+  }).catch(fail);
+});
+window.addEventListener('beforeunload', function (e) { if (S.dirty) { e.preventDefault(); e.returnValue = ''; } });
+
+function bindStatic() {
+  $$('#mainNav .nav-link').forEach(function (a) { a.addEventListener('click', function () { showTab(a.getAttribute('data-tab')); }); });
+  document.addEventListener('click', function (e) {
+    var g = e.target.closest('[data-go]'); if (g) showTab(g.getAttribute('data-go'));
+    var smp = e.target.closest('[data-sample]'); if (smp) loadSample(smp.getAttribute('data-sample'));
+  });
+  $('#btnNew').addEventListener('click', newProject);
+  $('#q').addEventListener('input', renderProjRows);
+  $('#btnSave').addEventListener('click', saveProject);
+  $('#btnAddSec').addEventListener('click', addSection);
+  $$('[data-add]').forEach(function (b) { b.addEventListener('click', function () { addRow(b.getAttribute('data-add')); }); });
+  $('#btnPaste').addEventListener('click', openPaste);
+  $('#btnDoPaste').addEventListener('click', doPaste);
+  $('#pasteText').addEventListener('input', previewPaste);
+  $('#btnClearItems').addEventListener('click', function () {
+    confirmBox('ล้างรายการ BOQ ทั้งหมด?', 'รายการทั้งหมดของโครงการนี้จะถูกลบ (ยังไม่บันทึกจนกว่าจะกดบันทึก)', true).then(function (ok) {
+      if (ok) { S.cur.items = []; markDirty(); renderBoq(); }
+    });
+  });
+  // project form
+  $$('#projForm [data-f]').forEach(function (el) {
+    el.addEventListener('input', function () {
+      var k = el.getAttribute('data-f'), v = el.value;
+      if (el.classList.contains('num')) v = num(v);
+      S.cur.project[k] = v;
+      if (k === 'markupPct') $('#chkSouth').checked = !!Number(v);
+      if (k === 'name') $('#editTitle').textContent = v || 'โครงการใหม่';
+      markDirty(); refreshLive();
+    });
+    if (el.classList.contains('num')) el.addEventListener('blur', function () { if (el.value !== '' && num(el.value) !== '') el.value = F(num(el.value), el.getAttribute('data-f') === 'markupPct' ? 2 : 2); });
+  });
+  $('#chkSouth').addEventListener('change', function () {
+    S.cur.project.markupPct = this.checked ? 5 : 0; $('[data-f=markupPct]').value = this.checked ? '5.00' : '';
+    markDirty(); refreshLive();
+  });
+  // sections (delegation)
+  $('#secRows').addEventListener('input', function (e) {
+    var tr = e.target.closest('tr'); if (!tr) return;
+    var s = S.cur.project.sections[Number(tr.getAttribute('data-i'))], k = e.target.getAttribute('data-k');
+    s[k] = k === 'factor' ? num(e.target.value) : e.target.value;
+    if (k === 'kind' && e.target.value === 'special') { s.factor = 1; tr.querySelector('[data-k=factor]').value = '1.0000'; }
+    markDirty(); if (k === 'name' || k === 'kind') renderBoq(); else { updateBoqCalcCells(); refreshLive(); }
+  });
+  $('#secRows').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-del-sec]'); if (!b) return;
+    var i = Number(b.getAttribute('data-del-sec')), s = S.cur.project.sections[i];
+    var n = S.cur.items.filter(function (it) { return it.section === s.code; }).length;
+    confirmBox('ลบหมวด "' + s.name + '"?', n ? 'มีรายการในหมวดนี้ ' + n + ' รายการ จะถูกลบด้วย' : '', true).then(function (ok) {
+      if (!ok) return;
+      S.cur.project.sections.splice(i, 1);
+      S.cur.items = S.cur.items.filter(function (it) { return it.section !== s.code; });
+      markDirty(); renderSections(); renderBoq();
+    });
+  });
+  // BOQ (delegation)
+  var boq = $('#boqRows');
+  boq.addEventListener('input', onBoqInput);
+  boq.addEventListener('change', function (e) { if (e.target.matches('select')) onBoqInput(e, true); });
+  boq.addEventListener('focusout', function (e) {
+    var el = e.target; if (!el.classList.contains('num')) return;
+    var v = num(el.value); if (v !== '') el.value = F(v, el.getAttribute('data-k') === 'qty' ? (Math.round(v) === v ? 2 : 3) : 2);
+  });
+  boq.addEventListener('click', onBoqClick);
+  boq.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' || !e.target.matches('input')) return;
+    e.preventDefault();
+    var tr = e.target.closest('tr'), k = e.target.getAttribute('data-k');
+    var next = tr.nextElementSibling;
+    if (!next) { addRow('ITEM'); next = $('#boqRows').lastElementChild; }
+    var t = next.querySelector('[data-k=' + k + ']') || next.querySelector('[data-k=name]'); if (t) t.focus();
+  });
+  // report
+  $$('#formPick input, #optSign, #optSample').forEach(function (el) { el.addEventListener('change', renderReport); });
+  $('#btnPrint').addEventListener('click', function () { if (S.dirty) toast('หมายเหตุ: ข้อมูลยังไม่ได้บันทึก', 'warning'); window.print(); });
+  $('#btnExportSheet').addEventListener('click', function () { exportReport(false); });
+  $('#btnExportPdf').addEventListener('click', function () { exportReport(true); });
+  $('#btnSaveSet').addEventListener('click', saveSettings);
+  $('#btnBackup').addEventListener('click', backupLocal);
+  $('#fileRestore').addEventListener('change', restoreLocal);
+  $('#btnResetLocal').addEventListener('click', resetLocal);
+  setupInstall();
+}
+
+/* ---------------------- Dashboard ---------------------- */
+function renderDash() {
+  var P = S.projects, mid = 0, con = 0, n = P.length, done = 0;
+  P.forEach(function (p) { mid += +p.midPrice || 0; con += +p.contractPrice || 0; if (p.status === 'ปรับลดแล้ว' || p.status === 'ลงนามสัญญาแล้ว') done++; });
+  var diff = mid - con;
+  $('#kpis').innerHTML = [
+    kpi('accent', 'bi-folder2', 'จำนวนโครงการ', n.toLocaleString('th-TH'), 'ปรับลดแล้ว/ลงนาม ' + done + ' โครงการ'),
+    kpi('', 'bi-cash-stack', 'ราคากลางรวม (บาท)', F(mid), 'รวมค่าใช้จ่ายพิเศษ'),
+    kpi('', 'bi-file-earmark-check', 'วงเงินตามสัญญารวม (บาท)', F(con), 'ราคาที่ปรับลดตามคำเสนอ'),
+    kpi('', 'bi-graph-down-arrow', 'ส่วนต่างจากราคากลาง (บาท)', F(diff), mid ? 'คิดเป็น ' + F(diff / mid * 100) + '% ของราคากลาง' : '-')
+  ].join('');
+  renderProjRows();
+}
+function kpi(cls, ico, lbl, val, sub) {
+  return '<div class="col-sm-6 col-lg-3"><div class="kpi ' + cls + '"><i class="bi ' + ico + ' ico"></i><div class="lbl">' + lbl + '</div><div class="val">' + val + '</div><div class="sub">' + sub + '</div></div></div>';
+}
+function statusBadge(s) {
+  var c = { 'ร่าง': 'secondary', 'ปรับลดแล้ว': 'success', 'ลงนามสัญญาแล้ว': 'primary', 'ยกเลิก': 'danger' }[s] || 'secondary';
+  return '<span class="badge rounded-pill text-bg-' + c + '">' + esc(s || 'ร่าง') + '</span>';
+}
+function renderProjRows() {
+  var q = ($('#q').value || '').toLowerCase();
+  var rows = S.projects.filter(function (p) { return !q || [p.name, p.projectNo, p.contractor, p.contractNo, p.agency].join(' ').toLowerCase().indexOf(q) >= 0; });
+  if (!rows.length) {
+    $('#projRows').innerHTML = '<tr><td colspan="8"><div class="empty"><i class="bi bi-inboxes"></i>' + (S.projects.length ? 'ไม่พบโครงการที่ค้นหา' : 'ยังไม่มีโครงการ — กด "สร้างโครงการใหม่" หรือโหลด "ตัวอย่าง ว 651"') + '</div></td></tr>';
+    return;
+  }
+  $('#projRows').innerHTML = rows.map(function (p) {
+    return '<tr><td><div class="proj-name">' + esc(p.name || '(ไม่มีชื่อ)') + '</div><div class="proj-meta">' +
+      (p.projectNo ? 'เลขที่โครงการ ' + esc(p.projectNo) + ' · ' : '') + esc(p.contractor || '') + (p.contractNo ? ' · สัญญา ' + esc(p.contractNo) : '') + '</div></td>' +
+      '<td class="text-end">' + F(p.budget) + '</td><td class="text-end">' + F(p.midPrice) + '</td><td class="text-end fw-semibold">' + F(p.contractPrice) + '</td>' +
+      '<td class="text-end">' + (p.pct === '' || p.pct === undefined ? '-' : F(p.pct)) + '</td><td>' + statusBadge(p.status) + '</td>' +
+      '<td class="small text-muted">' + esc(p.updatedAt || '') + '</td>' +
+      '<td class="text-end text-nowrap"><div class="btn-group btn-group-sm">' +
+      '<button class="btn btn-outline-success" title="เปิด/แก้ไข" onclick="openProject(\'' + p.id + '\')"><i class="bi bi-pencil"></i></button>' +
+      '<button class="btn btn-outline-primary" title="รายงาน" onclick="openProject(\'' + p.id + '\',\'report\')"><i class="bi bi-printer"></i></button>' +
+      '<button class="btn btn-outline-secondary" title="ทำสำเนา" onclick="dupProject(\'' + p.id + '\')"><i class="bi bi-copy"></i></button>' +
+      '<button class="btn btn-outline-danger" title="ลบ" onclick="delProject(\'' + p.id + '\')"><i class="bi bi-trash"></i></button></div></td></tr>';
+  }).join('');
+}
+
+/* ---------------------- Project lifecycle ---------------------- */
+function defaultSections() {
+  return [
+    { code: '1', name: 'งานก่อสร้าง', kind: 'construction', factor: '' },
+    { code: '2', name: 'งานครุภัณฑ์จัดซื้อ', kind: 'equipment', factor: 1.07 },
+    { code: '3', name: 'ค่าใช้จ่ายพิเศษตามข้อกำหนด', kind: 'special', factor: 1 }
+  ];
+}
+function guardDirty() { return S.dirty ? confirmBox('มีข้อมูลที่ยังไม่บันทึก', 'ต้องการละทิ้งการแก้ไขหรือไม่?', true) : Promise.resolve(true); }
+function newProject() {
+  guardDirty().then(function (ok) {
+    if (!ok) return;
+    S.cur = { project: { id: '', name: '', workType: 'อาคาร', projectNo: '', agency: S.settings.orgName || '', budget: '', offer: '', contractor: '', contractNo: '', contractDate: '', awardDate: '',
+      markupPct: 0, pctMode: 'trunc', adjRound: 'trunc', residualId: '', sections: defaultSections(), caseInfo: {}, status: 'ร่าง', note: '' }, items: [] };
+    S.dirty = false; openEditor();
+  });
+}
+function loadSample(k) {
+  guardDirty().then(function (ok) {
+    if (!ok) return;
+    var d = BOQ_SAMPLES[k](); d.project.id = ''; d.project.caseInfo = {};
+    d.items.forEach(function (it) { it.id = uid(); });
+    S.cur = d; S.dirty = true; openEditor(); markDirty();
+    toast('โหลดตัวอย่างแล้ว — ตรวจสอบผลในแท็บ "ผลการปรับลดราคา" และกดบันทึกหากต้องการเก็บไว้', 'info');
+  });
+}
+function openProject(id, tab) {
+  guardDirty().then(function (ok) {
+    if (!ok) return;
+    loading(true);
+    api('apiGetProject', id).then(function (d) {
+      d.project.sections = (d.project.sections && d.project.sections.length) ? d.project.sections : defaultSections();
+      d.project.caseInfo = d.project.caseInfo || {};
+      d.items.forEach(function (it) { if (!it.id) it.id = uid(); });
+      S.cur = d; S.dirty = false; loading(false); openEditor(tab);
+    }).catch(fail);
+  });
+}
+function dupProject(id) { loading(true); api('apiDuplicateProject', id).then(function (r) { S.projects = r.projects; loading(false); renderDash(); toast('ทำสำเนาโครงการแล้ว'); }).catch(fail); }
+function delProject(id) {
+  var p = S.projects.filter(function (x) { return x.id === id; })[0];
+  confirmBox('ลบโครงการ?', (p ? p.name : id) + ' — ข้อมูลทั้งหมดจะถูกลบถาวร', true).then(function (ok) {
+    if (!ok) return; loading(true);
+    api('apiDeleteProject', id).then(function (list) { S.projects = list; if (S.cur && S.cur.project.id === id) { S.cur = null; S.dirty = false; } loading(false); renderDash(); toast('ลบโครงการแล้ว'); }).catch(fail);
+  });
+}
+function validate() {
+  var p = S.cur.project, errs = [];
+  if (!String(p.name || '').trim()) errs.push('ชื่อโครงการ');
+  if (!(num(p.offer) > 0)) errs.push('ราคาตามคำเสนอของผู้ชนะ');
+  p.sections.forEach(function (s) { if (!(num(s.factor) > 0)) errs.push('Factor F ของหมวด "' + s.name + '"'); });
+  return errs;
+}
+function saveProject() {
+  var errs = validate();
+  if (errs.length) { Swal.fire({ icon: 'warning', title: 'กรอกข้อมูลไม่ครบ', html: 'กรุณาระบุ:<br>• ' + errs.map(esc).join('<br>• '), confirmButtonColor: '#16603f' }); return; }
+  loading(true);
+  var payload = { project: S.cur.project, items: S.cur.items };
+  api('apiSaveProject', payload).then(function (r) {
+    S.cur.project.id = r.id; S.cur.project.updatedAt = r.updatedAt; S.projects = r.projects; S.dirty = false;
+    $('#dirtyBadge').classList.add('d-none'); loading(false); toast('<i class="bi bi-check-circle"></i> บันทึกข้อมูลเรียบร้อย');
+  }).catch(fail);
+}
+function markDirty() { S.dirty = true; $('#dirtyBadge').classList.remove('d-none'); }
+
+/* ---------------------- Editor ---------------------- */
+function openEditor(tab) {
+  var p = S.cur.project;
+  $('#editTitle').textContent = p.name || 'โครงการใหม่';
+  $('#dirtyBadge').classList.toggle('d-none', !S.dirty);
+  $$('#projForm [data-f]').forEach(function (el) {
+    var k = el.getAttribute('data-f'), v = p[k];
+    if (el.classList.contains('num')) el.value = (v === '' || v === undefined || v === null || (k === 'markupPct' && !Number(v))) ? '' : F(Number(v));
+    else el.value = v === undefined || v === null ? '' : v;
+  });
+  $('#chkSouth').checked = !!Number(p.markupPct);
+  renderSections(); renderBoq();
+  showTab(tab || 'edit');
+}
+function renderSections() {
+  $('#secRows').innerHTML = S.cur.project.sections.map(function (s, i) {
+    return '<tr data-i="' + i + '"><td class="text-center fw-semibold">' + (i + 1) + '</td>' +
+      '<td><input class="form-control form-control-sm" data-k="name" value="' + esc(s.name) + '"></td>' +
+      '<td><select class="form-select form-select-sm" data-k="kind">' + ['construction', 'equipment', 'special'].map(function (k) {
+        return '<option value="' + k + '"' + (s.kind === k ? ' selected' : '') + '>' + kindLabel(k) + '</option>'; }).join('') + '</select></td>' +
+      '<td><input class="form-control form-control-sm num" data-k="factor" placeholder="เช่น 1.2592" value="' + (s.factor === '' ? '' : Number(s.factor).toFixed(4)) + '"></td>' +
+      '<td><button class="btn btn-sm btn-outline-danger" data-del-sec="' + i + '"><i class="bi bi-x"></i></button></td></tr>';
+  }).join('');
+}
+function addSection() {
+  var codes = S.cur.project.sections.map(function (s) { return Number(s.code) || 0; });
+  var c = String((codes.length ? Math.max.apply(null, codes) : 0) + 1);
+  S.cur.project.sections.push({ code: c, name: 'หมวดงานใหม่', kind: 'construction', factor: '' });
+  markDirty(); renderSections(); renderBoq();
+}
+function secOptions(cur) {
+  return S.cur.project.sections.map(function (s, i) { return '<option value="' + esc(s.code) + '"' + (s.code === cur ? ' selected' : '') + '>' + (i + 1) + '. ' + esc(s.name) + '</option>'; }).join('');
+}
+function secOf(code) { return S.cur.project.sections.filter(function (s) { return s.code === code; })[0]; }
+function rowMid(it) {
+  if (it.type !== 'ITEM') return '';
+  var s = secOf(it.section), f = s ? num(s.factor) : '';
+  if (it.cost === '' || f === '') return '';
+  var m = Number(it.cost) * f; var mk = Number(S.cur.project.markupPct) || 0;
+  return mk ? m * (1 + mk / 100) : m;
+}
+function sortItemsBySection() {
+  // จัดลำดับให้รายการเรียงตามหมวด (คงลำดับภายในหมวด)
+  var order = {}; S.cur.project.sections.forEach(function (s, i) { order[s.code] = i; });
+  S.cur.items = S.cur.items.map(function (it, i) { return { it: it, i: i }; })
+    .sort(function (a, b) { return ((order[a.it.section] || 0) - (order[b.it.section] || 0)) || (a.i - b.i); })
+    .map(function (x) { return x.it; });
+}
+function renderBoq() {
+  sortItemsBySection();
+  var items = S.cur.items;
+  if (!items.length) {
+    $('#boqRows').innerHTML = '<tr><td colspan="11"><div class="empty"><i class="bi bi-table"></i>ยังไม่มีรายการ — กดปุ่ม "+ รายการ" หรือ "วางจาก Excel"</div></td></tr>';
+    refreshLive(); return;
+  }
+  var lastSec = null, html = '';
+  items.forEach(function (it, i) {
+    var s = secOf(it.section) || {};
+    if (it.section !== lastSec) {
+      lastSec = it.section;
+      html += '<tr class="table-light"><td colspan="11" class="small fw-bold text-success py-1"><i class="bi bi-bookmark-fill"></i> หมวด ' + esc(s.name || it.section) + ' <span class="text-muted fw-normal">· ' + kindLabel(s.kind) + ' · F = ' + (s.factor === '' ? '?' : Number(s.factor).toFixed(4)) + '</span></td></tr>';
+    }
+    var isItem = it.type === 'ITEM';
+    var mid = rowMid(it);
+    html += '<tr class="row-' + it.type + (s.kind === 'special' ? ' row-special' : '') + '" data-id="' + it.id + '">' +
+      '<td class="rowno">' + (i + 1) + '</td>' +
+      '<td><select class="form-select form-select-sm" data-k="type"><option value="ITEM"' + (isItem ? ' selected' : '') + '>รายการ</option><option value="H1"' + (it.type === 'H1' ? ' selected' : '') + '>หัวข้อ (มีรวม)</option><option value="H2"' + (it.type === 'H2' ? ' selected' : '') + '>หัวข้อย่อย</option></select></td>' +
+      '<td><select class="form-select form-select-sm" data-k="section">' + secOptions(it.section) + '</select></td>' +
+      '<td><input class="form-control form-control-sm" data-k="no" value="' + esc(it.no) + '"></td>' +
+      '<td><input class="form-control form-control-sm" data-k="name" value="' + esc(it.name) + '"></td>' +
+      (isItem ?
+        '<td><input class="form-control form-control-sm" data-k="unit" value="' + esc(it.unit) + '"></td>' +
+        '<td><input class="form-control form-control-sm num" data-k="qty" value="' + (it.qty === '' || it.qty === undefined ? '' : F(it.qty, Math.round(it.qty) === Number(it.qty) ? 2 : 3)) + '"></td>' +
+        '<td><input class="form-control form-control-sm num" data-k="unitCost" value="' + (it.unitCost === '' || it.unitCost === undefined ? '' : F(it.unitCost)) + '"></td>' +
+        '<td><input class="form-control form-control-sm num" data-k="cost" value="' + (it.cost === '' || it.cost === undefined ? '' : F(it.cost)) + '"></td>' +
+        '<td class="calc-cell" data-mid>' + (mid === '' ? '-' : F(mid)) + '</td>'
+        : '<td colspan="5" class="small text-muted">' + (it.type === 'H1' ? 'หัวข้อหลัก — จะแสดงบรรทัด "รวม' + esc(it.name) + '" ในรายงาน' : 'หัวข้อย่อย (ไม่มีบรรทัดรวม)') + '</td>') +
+      '<td class="row-actions text-nowrap"><div class="btn-group btn-group-sm">' +
+      '<button class="btn btn-light" data-act="up" title="เลื่อนขึ้น"><i class="bi bi-arrow-up"></i></button>' +
+      '<button class="btn btn-light" data-act="down" title="เลื่อนลง"><i class="bi bi-arrow-down"></i></button>' +
+      '<button class="btn btn-light" data-act="ins" title="แทรกรายการด้านล่าง"><i class="bi bi-plus"></i></button>' +
+      '<button class="btn btn-light text-danger" data-act="del" title="ลบ"><i class="bi bi-x-lg"></i></button></div></td></tr>';
+  });
+  $('#boqRows').innerHTML = html;
+  refreshLive();
+}
+function findItem(id) { for (var i = 0; i < S.cur.items.length; i++) if (S.cur.items[i].id === id) return i; return -1; }
+function onBoqInput(e, isChange) {
+  var tr = e.target.closest('tr[data-id]'); if (!tr) return;
+  var it = S.cur.items[findItem(tr.getAttribute('data-id'))], k = e.target.getAttribute('data-k'); if (!it || !k) return;
+  if (e.target.tagName === 'SELECT' && !isChange) return;
+  var v = e.target.value;
+  if (e.target.classList.contains('num')) v = num(v);
+  it[k] = v;
+  if (k === 'unitCost' || k === 'qty') {
+    if (it.unitCost !== '' && it.unitCost !== undefined && it.qty !== '') {
+      it.cost = E.r2(Number(it.qty) * Number(it.unitCost));
+      var c = tr.querySelector('[data-k=cost]'); if (c) c.value = F(it.cost);
+    }
+  }
+  if (k === 'cost') { it.unitCost = ''; var u = tr.querySelector('[data-k=unitCost]'); if (u) u.value = ''; }
+  markDirty();
+  if (k === 'type' || k === 'section') { renderBoq(); return; }
+  var m = tr.querySelector('[data-mid]'); if (m) { var mid = rowMid(it); m.textContent = mid === '' ? '-' : F(mid); }
+  refreshLiveDebounced();
+}
+function updateBoqCalcCells() {
+  $$('#boqRows tr[data-id]').forEach(function (tr) {
+    var it = S.cur.items[findItem(tr.getAttribute('data-id'))]; var m = tr.querySelector('[data-mid]');
+    if (it && m) { var mid = rowMid(it); m.textContent = mid === '' ? '-' : F(mid); }
+  });
+}
+function onBoqClick(e) {
+  var b = e.target.closest('[data-act]'); if (!b) return;
+  var tr = b.closest('tr[data-id]'), i = findItem(tr.getAttribute('data-id')), items = S.cur.items, a = b.getAttribute('data-act');
+  if (a === 'del') { items.splice(i, 1); }
+  if (a === 'up' && i > 0 && items[i - 1].section === items[i].section) { var t = items[i - 1]; items[i - 1] = items[i]; items[i] = t; }
+  if (a === 'down' && i < items.length - 1 && items[i + 1].section === items[i].section) { var t2 = items[i + 1]; items[i + 1] = items[i]; items[i] = t2; }
+  if (a === 'ins') items.splice(i + 1, 0, blankRow('ITEM', items[i].section));
+  markDirty(); renderBoq();
+  if (a === 'ins') { var n = $('#boqRows tr[data-id="' + items[i + 1].id + '"] [data-k=name]'); if (n) n.focus(); }
+}
+function blankRow(type, section) { return { id: uid(), type: type, section: section, no: type === 'ITEM' ? '-' : '', name: '', unit: '', qty: '', unitCost: '', cost: '' }; }
+function addRow(type) {
+  var items = S.cur.items, sec = items.length ? items[items.length - 1].section : (S.cur.project.sections[0] || {}).code;
+  if (!sec) { toast('กรุณาเพิ่มหมวดงานก่อน', 'warning'); return; }
+  var r = blankRow(type, sec); items.push(r); markDirty(); renderBoq();
+  var n = $('#boqRows tr[data-id="' + r.id + '"] [data-k=name]'); if (n) { n.focus(); n.scrollIntoView({ block: 'center' }); }
+}
+
+/* paste from Excel */
+var pasteModal;
+function openPaste() {
+  $('#pasteSec').innerHTML = secOptions((S.cur.project.sections[0] || {}).code);
+  $('#pasteText').value = ''; $('#pastePreview').textContent = '';
+  pasteModal = pasteModal || new bootstrap.Modal($('#pasteModal')); pasteModal.show();
+}
+function parsePaste() {
+  var mode = $('#pasteCostMode').value, sec = $('#pasteSec').value;
+  return $('#pasteText').value.split(/\r?\n/).filter(function (l) { return l.replace(/\t/g, '').trim(); }).map(function (l) {
+    var c = l.split('\t').map(function (x) { return x.trim(); });
+    while (c.length < 5) c.push('');
+    var qty = num(c[3]), cost = num(c[4]);
+    var r = { id: uid(), section: sec, no: c[0], name: c[1], unit: c[2], qty: qty, unitCost: '', cost: '' };
+    if (qty === '' && cost === '') { r.type = /^\d+(\.\d+)+$/.test(c[0]) ? 'H1' : 'H2'; r.unit = ''; }
+    else { r.type = 'ITEM'; if (mode === 'unit') { r.unitCost = cost; r.cost = qty !== '' && cost !== '' ? E.r2(qty * cost) : ''; } else r.cost = cost; }
+    return r;
+  });
+}
+function previewPaste() {
+  var rows = parsePaste(), n = rows.filter(function (r) { return r.type === 'ITEM'; }).length;
+  $('#pastePreview').textContent = rows.length ? 'พบ ' + rows.length + ' แถว (รายการ ' + n + ', หัวข้อ ' + (rows.length - n) + ')' : '';
+}
+function doPaste() {
+  var rows = parsePaste(); if (!rows.length) { toast('ไม่พบข้อมูล', 'warning'); return; }
+  var sec = $('#pasteSec').value;
+  if ($('#pasteReplace').checked) S.cur.items = S.cur.items.filter(function (it) { return it.section !== sec; });
+  S.cur.items = S.cur.items.concat(rows); pasteModal.hide(); markDirty(); renderBoq();
+  toast('นำเข้า ' + rows.length + ' แถวแล้ว');
+}
+
+/* ---------------------- Calculation & legal check ---------------------- */
+function compute() {
+  var p = S.cur.project;
+  var secs = p.sections.map(function (s) { return Object.assign({}, s, { factor: num(s.factor) || 1 }); });
+  S.res = E.compute({ offer: num(p.offer) || 0, markupPct: num(p.markupPct) || 0, pctMode: p.pctMode || 'trunc', adjRound: p.adjRound || 'trunc', residualId: p.residualId || '' }, secs, S.cur.items);
+  return S.res;
+}
+var _lt; function refreshLiveDebounced() { clearTimeout(_lt); _lt = setTimeout(refreshLive, 250); }
+function refreshLive() {
+  if (!S.cur) return;
+  var r = compute(), p = S.cur.project, lc = legalCheck(p, r);
+  var nItems = S.cur.items.filter(function (i) { return i.type === 'ITEM'; }).length;
+  $('#liveSummary').innerHTML =
+    '<div class="text-center mb-2"><div class="small text-muted">อัตราร้อยละที่ปรับลด</div><div class="pct-big">' + (r.P1 ? F(r.pct) : '-') + '</div></div>' +
+    line('ราคากลาง', F(r.total)) + line('ค่าใช้จ่ายพิเศษฯ', F(r.special)) + line('(1) ราคากลางหักค่าใช้จ่ายพิเศษ', F(r.P1)) +
+    line('ราคาตามคำเสนอ', F(r.offer)) + line('(2) ราคาเสนอหักค่าใช้จ่ายพิเศษ', F(r.P2)) + line('(3) ผลต่าง (1)−(2)', F(r.P3)) +
+    line('จำนวนรายการ', nItems + ' รายการ') +
+    '<div class="status-box decision ' + lc.level + ' p-2"><div><b>' + lc.title + '</b><div class="small mt-1">' + lc.short + '</div></div></div>' +
+    '<button class="btn btn-success w-100 mt-3" data-go="calc"><i class="bi bi-calculator"></i> ดูผลการปรับลดราคา</button>';
+  function line(a, b) { return '<div class="sum-line"><span>' + a + '</span><b>' + b + '</b></div>'; }
+}
+
+/** วิเคราะห์กรณีตามหนังสือ ว 651 ข้อ 1.2.2–1.2.4 และข้อ 2 */
+function legalCheck(p, r) {
+  var mid = r.total, offer = num(p.offer) || 0, budget = num(p.budget) || 0, ci = p.caseInfo || {};
+  var o = { level: 'info', title: 'รอข้อมูล', short: 'กรอกราคาตามคำเสนอและรายการ BOQ', detail: [], clause: '', canAdjust: false };
+  if (!offer || !mid) return o;
+  var eq = Math.abs(offer - mid) < 0.005, overBudget = budget && offer > budget + 0.005, overMid = offer > mid + 0.005;
+  if (!overMid && !overBudget) {
+    o.canAdjust = true; o.level = 'success';
+    if (eq) { o.title = 'ราคาเสนอเท่ากับราคากลาง'; o.short = 'ร้อยละ 0.00 — ราคาแต่ละรายการเท่ากับราคากลาง ลงนามสัญญาได้ (ข้อ 1.2.3)'; }
+    else { o.title = 'ปรับลดราคาได้ตามข้อ 1.2.2'; o.short = 'ราคาเสนอต่ำกว่าราคากลาง' + (budget ? 'และวงเงินที่จะจ้าง' : '') + ' → ปรับลดทุกรายการ แล้วลงนามสัญญา (ข้อ 1.2.3)'; }
+    o.clause = ci.recalc ? 'ข้อ 1.2.4 (1)' : 'ข้อ 1.2.2';
+  } else if (overMid && overBudget) {
+    o.level = 'danger'; o.title = 'สูงกว่าราคากลางและวงเงินที่จะจ้าง';
+    o.short = 'ต้องต่อรองราคาก่อน (ข้อ 1.2.4 (2)) — ระบุผลการต่อรองในหน้าผลการปรับลดราคา';
+    if (ci.nego === 'below') { o.level = 'warning'; o.title = 'ต่อรองแล้ว: ลดต่ำกว่าราคากลาง (ข้อ 1.2.4 (2.1))'; o.short = 'ให้แก้ไข "ราคาตามคำเสนอ" เป็นราคาหลังต่อรอง แล้วปรับลดตามข้อ 1.2.2'; }
+    if (ci.nego === 'refuse') { o.title = 'ยกเลิกการจัดซื้อจัดจ้าง (ข้อ 1.2.4 (2.3))'; o.short = 'ผู้ชนะไม่ยอมลดราคา หรือลดแล้วยังสูงกว่าวงเงินที่จะจ้าง'; }
+    o.clause = 'ข้อ 1.2.4 (2)';
+  } else if (overMid && !overBudget) {
+    o.level = 'warning'; o.canAdjust = true; o.title = 'สูงกว่าราคากลาง แต่ไม่เกินวงเงิน';
+    o.short = 'หนังสือ ว 651 ไม่ได้กำหนดกรณีนี้ไว้โดยตรง — ให้ดำเนินการตามระเบียบฯ พ.ศ. 2560 (การต่อรองราคา) ก่อน หากรับราคาได้ ระบบจะคำนวณเป็นการปรับเพิ่มตามสัดส่วน';
+    o.clause = 'นอกกรณี ข้อ 1.2.4';
+  } else {
+    o.level = 'warning'; o.title = 'ต่ำกว่าราคากลาง แต่สูงกว่าวงเงินที่จะจ้าง';
+    o.short = 'ไม่อยู่ในกรณีตามข้อ 1.2.4 — ต้องดำเนินการเรื่องวงเงิน/ต่อรองราคาตามระเบียบฯ ก่อนลงนาม';
+    o.clause = 'นอกกรณี ข้อ 1.2.4';
+  }
+  return o;
+}
+
+function renderCalc() {
+  var r = compute(), p = S.cur.project, lc = legalCheck(p, r), ci = p.caseInfo || (p.caseInfo = {});
+  var itemsAdj = r.rows.filter(function (x) { return x.type === 'ITEM' && x.kind !== 'special'; });
+  var mk = r.markupPct;
+  var html = '';
+  html += '<div class="d-flex flex-wrap align-items-center gap-2 mb-3"><h5 class="m-0 flex-grow-1"><i class="bi bi-calculator text-success"></i> ผลการปรับลดราคา — ' + esc(p.name || 'โครงการใหม่') + '</h5>' +
+    '<button class="btn btn-outline-secondary btn-sm" data-go="edit"><i class="bi bi-pencil"></i> แก้ไขข้อมูล</button>' +
+    '<button class="btn btn-success btn-sm" onclick="saveProject()"><i class="bi bi-save"></i> บันทึก</button>' +
+    '<button class="btn btn-primary btn-sm" data-go="report"><i class="bi bi-printer"></i> ไปหน้ารายงาน</button></div>';
+
+  // Decision
+  var icon = { success: 'bi-check-circle-fill', warning: 'bi-exclamation-triangle-fill', danger: 'bi-x-octagon-fill', info: 'bi-info-circle-fill' }[lc.level];
+  html += '<div class="decision ' + lc.level + ' mb-3"><i class="bi ' + icon + ' dico"></i><div class="flex-grow-1"><div class="fw-bold">' + lc.title + (lc.clause ? ' <span class="badge text-bg-light border ms-1">' + lc.clause + '</span>' : '') + '</div>' +
+    '<div class="small mt-1">' + lc.short + '</div>' +
+    '<div class="row g-2 mt-2 small">' +
+    '<div class="col-md-6"><div class="form-check"><input class="form-check-input" type="checkbox" id="ciRecalc"' + (ci.recalc ? ' checked' : '') + '><label class="form-check-label" for="ciRecalc">ราคากลางนี้จัดทำใหม่ เนื่องจากแบบแสดงรายการฯ เดิมคลาดเคลื่อนจากแบบรูปรายการ (ข้อ 1.2.4)</label></div></div>' +
+    '<div class="col-md-6"><label class="me-1">ผลการต่อรองราคา (กรณีสูงกว่าราคากลางและวงเงิน):</label><select class="form-select form-select-sm d-inline-block w-auto" id="ciNego">' +
+    [['', '— ยังไม่ต่อรอง / ไม่เกี่ยวข้อง —'], ['below', '(2.1) ยอมลดต่ำกว่าราคากลางและวงเงิน'], ['equal', '(2.2) ยอมลดเท่ากับราคากลางและวงเงิน'], ['refuse', '(2.3) ไม่ยอมลด / ยังสูงกว่าวงเงิน']]
+      .map(function (o) { return '<option value="' + o[0] + '"' + (ci.nego === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') + '</select></div></div>' +
+    applicabilityNote(p) + '</div></div>';
+
+  // KPIs
+  html += '<div class="calc-grid mb-3">' +
+    kpiBox('ราคากลาง' + (mk ? ' (บวกเพิ่ม ' + mk + '%)' : ''), F(r.total), 'bi-cash-stack') +
+    kpiBox('ราคาตามคำเสนอ', F(r.offer), 'bi-hand-index') +
+    kpiBox('ผลต่าง (3)', F(r.P3), 'bi-arrow-down-up') +
+    '<div class="kpi accent"><i class="bi bi-percent ico"></i><div class="lbl">อัตราร้อยละที่ปรับลด</div><div class="val" style="font-size:1.9rem">' + (r.P1 ? F(r.pct) : '-') + '</div><div class="sub">ตัวคูณ = ' + (r.factor ? r.factor.toFixed(p.pctMode === 'exact' ? 8 : 4) : '-') + '</div></div></div>';
+
+  // Formula boxes
+  html += '<div class="row g-3 mb-3">' +
+    '<div class="col-lg-4"><div class="formula-box"><h6>วิธีการคำนวณราคากลางหักค่าใช้จ่ายพิเศษตามข้อกำหนด</h6>' +
+    fl('ราคากลาง', r.total) + fl('<u>หัก</u> ค่าใช้จ่ายพิเศษตามข้อกำหนด', r.special) + fl('ผลต่างระหว่างราคากลางหักค่าใช้จ่ายพิเศษฯ', r.P1, 'total') + '</div></div>' +
+    '<div class="col-lg-4"><div class="formula-box"><h6>วิธีการคำนวณราคาตามคำเสนอฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด</h6>' +
+    fl('ราคาที่เสนอของผู้ชนะการจัดซื้อจัดจ้าง', r.offer) + fl('<u>หัก</u> ค่าใช้จ่ายพิเศษตามข้อกำหนด', r.special) + fl('ผลต่างระหว่างราคาตามคำเสนอฯ หักค่าใช้จ่ายพิเศษฯ', r.P2, 'total') + '</div></div>' +
+    '<div class="col-lg-4"><div class="formula-box"><h6>ผลต่างระหว่างราคากลางกับราคาตามคำเสนอฯ</h6>' +
+    fl('ราคากลางหักค่าใช้จ่ายพิเศษฯ <span class="tag">(1)</span>', r.P1) + fl('<u>หัก</u> ราคาที่เสนอฯ หักค่าใช้จ่ายพิเศษฯ <span class="tag">(2)</span>', r.P2) +
+    fl('ผลต่าง <span class="tag">(3)</span>', r.P3, 'total') +
+    '<div class="small text-muted mt-2">(3) ÷ (1) × 100 = ' + (r.P1 ? r.rawPct.toFixed(6) : '-') + ' → ใช้ <b>' + F(r.pct) + '</b></div></div></div></div>';
+
+  // Options + residual + checks
+  html += '<div class="row g-3 mb-3"><div class="col-lg-7"><div class="formula-box"><h6><i class="bi bi-sliders"></i> วิธีปัดเศษและการปรับส่วนต่าง</h6>' +
+    '<div class="row g-2 small">' +
+    '<div class="col-md-6"><label class="form-label">อัตราร้อยละ</label><select class="form-select form-select-sm" id="optPct">' +
+    opt('trunc', 'ทศนิยม 2 ตำแหน่ง ตัดเศษทิ้ง (ตามตัวอย่าง ว 651)', p.pctMode) + opt('round', 'ทศนิยม 2 ตำแหน่ง ปัดเศษ', p.pctMode) + opt('exact', 'ใช้อัตราจริง ไม่ปัดเศษ', p.pctMode) + '</select></div>' +
+    '<div class="col-md-6"><label class="form-label">ราคาที่ปรับลดแต่ละรายการ (สตางค์)</label><select class="form-select form-select-sm" id="optAdj">' +
+    opt('trunc', 'ตัดเศษสตางค์ทิ้ง (ตามตัวอย่าง ว 651)', p.adjRound) + opt('round', 'ปัดเศษสตางค์', p.adjRound) + '</select></div>' +
+    '<div class="col-12"><label class="form-label">นำส่วนต่างจากการปัดเศษ <b class="text-danger">' + F(r.residual) + '</b> บาท ไปปรับในรายการ (หมายเหตุ (*) ห้ามใช้รายการค่าใช้จ่ายพิเศษ)</label>' +
+    '<select class="form-select form-select-sm" id="optTarget"><option value="">อัตโนมัติ — รายการที่มีราคากลางสูงสุด (ตามตัวอย่าง ว 651)</option>' +
+    itemsAdj.map(function (x) { return '<option value="' + esc(x.id) + '"' + (String(p.residualId) === String(x.id) ? ' selected' : '') + '>' + esc((x.no && x.no !== '-' ? x.no + ' ' : '') + x.name) + ' — ' + F(x.base) + '</option>'; }).join('') + '</select></div></div>' +
+    '<div class="small mt-2 text-muted">สูตร: ราคาที่ปรับลด = ราคากลางรายการ × (1 − ร้อยละ/100) ; ราคาต่อหน่วย = ราคาที่ปรับลด ÷ จำนวน ; ส่วนต่างสะสมปรับเข้ารายการที่เลือก เพื่อให้วงเงินรวมเท่ากับราคาตามคำเสนอพอดี</div></div></div>' +
+    '<div class="col-lg-5"><div class="formula-box"><h6><i class="bi bi-shield-check"></i> ตรวจสอบความถูกต้อง</h6>' +
+    r.checks.map(function (c) { return '<div class="check-item"><i class="bi ' + (c.ok ? 'bi-check-circle-fill text-success' : 'bi-x-circle-fill text-danger') + '"></i><span>' + c.msg + '</span></div>'; }).join('') +
+    '<div class="check-item"><i class="bi ' + (r.target ? 'bi-check-circle-fill text-success' : 'bi-dash-circle text-muted') + '"></i><span>ส่วนต่างปัดเศษ ' + F(r.residual) + ' บาท ปรับในรายการ: ' + (r.target ? esc(r.target.name) : '-') + '</span></div>' +
+    (Math.abs(r.residual) > 0.01 * Math.max(1, r.P2) / 100 ? '<div class="check-item"><i class="bi bi-exclamation-triangle-fill text-warning"></i><span>ส่วนต่างปัดเศษค่อนข้างสูง ควรพิจารณาเลือกรายการที่เหมาะสม</span></div>' : '') +
+    (p.budget && r.sumAdj > num(p.budget) ? '<div class="check-item"><i class="bi bi-x-circle-fill text-danger"></i><span>วงเงินตามสัญญาสูงกว่าวงเงินงบประมาณ</span></div>' : '') +
+    '</div></div></div>';
+
+  // Detail table
+  html += '<div class="card card-soft"><div class="card-header d-flex align-items-center"><span class="flex-grow-1"><i class="bi bi-table"></i> ตารางราคากลางและราคาที่ปรับลดตามคำเสนอ</span><span class="small text-muted">แถวสีเหลือง = รายการที่รับส่วนต่างปัดเศษ</span></div>' +
+    '<div class="table-responsive" style="max-height:70vh"><table class="table table-sm table-bordered detail-table mb-0"><thead><tr>' +
+    '<th rowspan="2">ลำดับ</th><th rowspan="2">รายการ</th><th rowspan="2">หน่วย</th><th rowspan="2">จำนวน</th><th colspan="' + (mk ? 4 : 3) + '">ราคากลางงานก่อสร้าง (บาท)</th><th colspan="2">ราคาที่ปรับลดตามคำเสนอ (บาท)</th></tr><tr>' +
+    '<th>ค่างานต้นทุน</th><th>Factor F/Vat</th><th>ราคากลาง</th>' + (mk ? '<th>บวกเพิ่ม ' + mk + '%</th>' : '') + '<th>ราคาที่ปรับลด</th><th>ราคาต่อหน่วย</th></tr></thead><tbody>' +
+    reportRows(p, r).map(function (x) {
+      var tgt = r.target && x.src === r.target;
+      return '<tr class="k-' + x.kind + (x.special ? ' k-special' : '') + (tgt ? ' target' : '') + '"><td class="text-center">' + esc(x.no) + '</td><td>' + esc(x.name) + '</td><td class="text-center">' + esc(x.unit) + '</td>' +
+        '<td class="n">' + F(x.qty) + '</td><td class="n">' + F(x.cost) + '</td><td class="n">' + (x.factor === '' ? '' : Number(x.factor).toFixed(4)) + '</td><td class="n">' + F(x.mid) + '</td>' +
+        (mk ? '<td class="n">' + F(x.midPlus) + '</td>' : '') + '<td class="n fw-semibold">' + F(x.adj) + '</td><td class="n">' + F(x.unitAdj) + '</td></tr>';
+    }).join('') +
+    '<tr class="table-success fw-bold"><td colspan="6" class="text-end">วงเงินรวม</td><td class="n">' + F(r.totalMid) + '</td>' + (mk ? '<td class="n">' + F(r.total) + '</td>' : '') + '<td class="n">' + F(r.sumAdj) + '</td><td>(*)</td></tr>' +
+    '</tbody></table></div><div class="card-footer small">(*) ส่วนต่างนี้ให้ปรับเพิ่มลดในรายการใดรายการหนึ่งได้ตามความเหมาะสม ยกเว้นรายการค่าใช้จ่ายพิเศษตามข้อกำหนด ทั้งนี้ วงเงินรวมของการปรับลดราคาจะต้องเท่ากับราคาตามคำเสนอของผู้ชนะการจัดซื้อจัดจ้าง</div></div>';
+
+  $('#calcBody').innerHTML = html;
+  $('#optPct').addEventListener('change', function () { p.pctMode = this.value; markDirty(); renderCalc(); });
+  $('#optAdj').addEventListener('change', function () { p.adjRound = this.value; markDirty(); renderCalc(); });
+  $('#optTarget').addEventListener('change', function () { p.residualId = this.value; markDirty(); renderCalc(); });
+  $('#ciRecalc').addEventListener('change', function () { ci.recalc = this.checked; markDirty(); renderCalc(); });
+  $('#ciNego').addEventListener('change', function () { ci.nego = this.value; markDirty(); renderCalc(); });
+
+  function kpiBox(l, v, i) { return '<div class="kpi"><i class="bi ' + i + ' ico"></i><div class="lbl">' + l + '</div><div class="val">' + v + '</div></div>'; }
+  function fl(a, b, cls) { return '<div class="fline ' + (cls || '') + '"><span>' + a + '</span><span>' + F(b) + '</span></div>'; }
+  function opt(v, t, cur) { return '<option value="' + v + '"' + ((cur || 'trunc') === v ? ' selected' : '') + '>' + t + '</option>'; }
+}
+function applicabilityNote(p) {
+  var s = '<div class="small mt-2"><i class="bi bi-calendar-check"></i> <b>การใช้บังคับ (ข้อ 2):</b> ใช้กับงานจ้างก่อสร้างที่ประกาศผลผู้ชนะแล้วแต่ยังไม่ได้ลงนามในสัญญา';
+  if (p.contractDate && p.contractDate < '2025-09-26') s += ' — <span class="text-danger fw-semibold">วันที่ลงนามสัญญาที่ระบุ (' + E.thaiDate(p.contractDate) + ') ก่อนวันที่หนังสือ (26 ก.ย. 2568) โปรดตรวจสอบ</span>';
+  return s + '</div>';
+}
+
+/** แปลงผลคำนวณเป็นแถวแสดงผล/รายงาน (หมวด → หัวข้อ → รายการ → รวม) */
+function reportRows(p, r) {
+  var out = [], bySec = {};
+  r.rows.forEach(function (x) { (bySec[x.section] = bySec[x.section] || []).push(x); });
+  p.sections.forEach(function (s, si) {
+    var rows = bySec[s.code] || []; if (!rows.length) return;
+    var F_ = num(s.factor) || '';
+    out.push({ kind: 'SEC', no: String(si + 1), name: s.name, unit: '', qty: '', cost: '', factor: '', mid: '', midPlus: '', adj: '', unitAdj: '' });
+    var open = null;
+    function flush() { if (open) out.push({ kind: 'SUB', no: '', name: 'รวมค่า' + open.name.replace(/^ค่า/, ''), unit: '', qty: '', cost: open.sub.cost, factor: F_, mid: open.sub.mid, midPlus: open.sub.midPlus, adj: open.sub.adj, unitAdj: '' }); open = null; }
+    rows.forEach(function (x) {
+      if (x.type === 'H1') { flush(); open = x; out.push({ kind: 'H1', no: x.no || '', name: x.name, unit: '', qty: '', cost: '', factor: '', mid: '', midPlus: '', adj: '', unitAdj: '' }); return; }
+      if (x.type === 'H2') { out.push({ kind: 'H2', no: x.no || '', name: x.name, unit: '', qty: '', cost: '', factor: '', mid: '', midPlus: '', adj: '', unitAdj: '' }); return; }
+      out.push({ kind: 'ITEM', src: x, special: x.kind === 'special', no: x.no || '', name: x.name, unit: x.unit || '', qty: x.qty, cost: x.cost, factor: x.factor, mid: x.mid, midPlus: x.midPlus, adj: x.adj, unitAdj: x.unitAdj });
+    });
+    flush();
+    var t = r.secTotals[s.code];
+    out.push({ kind: 'SECTOT', no: '', name: 'รวม ' + s.name, unit: '', qty: '', cost: t.cost, factor: F_, mid: t.mid, midPlus: t.midPlus, adj: t.adj, unitAdj: '' });
+  });
+  return out;
+}
+
+/* ---------------------- Reports ---------------------- */
+function renderReport() {
+  if (!S.cur) return;
+  var r = compute(), p = S.cur.project, st = S.settings, f = ($('input[name=rf]:checked') || {}).value || '1';
+  var html = '';
+  if (f === '1' || f === '3') html += reportSummary(p, r, st);
+  if (f === '2' || f === '3') html += reportContract(p, r, st);
+  $('#printArea').innerHTML = html;
+}
+function sampleHead() { return $('#optSample').checked ? '<div class="r-sample">ตัวอย่าง</div>' : ''; }
+function signHtml(people) {
+  if (!$('#optSign').checked) return '';
+  return '<div class="sign">' + people.map(function (x) {
+    return '<div>ลงชื่อ ..................................................... ' + x[2] + '<br>( ' + (x[0] ? esc(x[0]) : '.....................................................') + ' )<br>' + (x[1] ? 'ตำแหน่ง ' + esc(x[1]) : 'ตำแหน่ง .....................................................') + '</div>';
+  }).join('') + '</div>';
+}
+function reportSummary(p, r, st) {
+  var mk = r.markupPct;
+  var h = '<div class="paper landscape">' + sampleHead() +
+    '<div class="r-title">แบบสรุปราคากลางงานก่อสร้าง' + esc(p.workType && p.workType !== 'อื่น ๆ' ? p.workType : '') + '</div>' +
+    (mk ? '<div class="r-center">(กรณีราคากลางบวกเพิ่ม ร้อยละ ' + mk + ')</div>' : '') +
+    '<div class="r-center">โครงการงานก่อสร้าง ' + esc(p.name) + '  งบประมาณ ' + F(num(p.budget) || 0) + ' บาท  เลขที่โครงการ ' + esc(p.projectNo || '-') + '</div>';
+  // table 1
+  h += '<div class="mt-2"><b>ตาราง :</b> สรุปราคากลางโครงการงานก่อสร้าง ' + esc(p.name) + '</div><table class="rt"><thead><tr><th style="width:8%">ลำดับที่</th><th>รายการ</th><th style="width:7%">หน่วย</th><th style="width:14%">ค่างานต้นทุน</th><th style="width:11%">Factor F / Vat</th><th style="width:14%">ราคากลาง</th>' + (mk ? '<th style="width:14%">ราคากลาง<br>บวกเพิ่ม ร้อยละ ' + mk + '</th>' : '') + '</tr></thead><tbody>' +
+    p.sections.map(function (s, i) {
+      var t = r.secTotals[s.code] || {};
+      return '<tr><td class="c">' + (i + 1) + '</td><td>' + esc(s.name) + '</td><td class="c">บาท</td><td class="n">' + F(t.cost || 0) + '</td><td class="n">' + (num(s.factor) || 1).toFixed(4) + '</td><td class="n">' + F(t.mid || 0) + '</td>' + (mk ? '<td class="n">' + F(t.midPlus || 0) + '</td>' : '') + '</tr>';
+    }).join('') +
+    '<tr><td colspan="' + (mk ? 6 : 5) + '" class="n" style="border:none;border-right:1px solid #333"><b>รวม</b></td><td class="n shade"><b>' + F(r.total) + '</b></td></tr></tbody></table>';
+  // table 2
+  h += '<div class="mt-2"><b>ตาราง :</b> ราคาตามคำเสนอของผู้ชนะการจัดซื้อจัดจ้าง</div><table class="rt" style="width:60%"><thead><tr><th style="width:13%">ลำดับที่</th><th>รายการ</th><th style="width:12%">หน่วย</th><th style="width:24%">ราคาที่เสนอ</th></tr></thead>' +
+    '<tbody><tr><td class="c">1</td><td>ราคาตามคำเสนอของผู้ชนะการจัดซื้อจัดจ้าง</td><td class="c">บาท</td><td class="n shade">' + F(r.offer) + '</td></tr></tbody></table>';
+  // calc boxes
+  function bl(a, v, cls) { return '<div class="bc-line"><span>' + a + '</span><span class="v ' + (cls || '') + '">' + F(v) + '</span></div>'; }
+  h += '<div class="box-calc"><div><div class="bc-title">วิธีการคำนวณราคากลางหักค่าใช้จ่ายพิเศษตามข้อกำหนด</div>' + bl('ราคากลาง', r.total) + bl('<u>หัก</u> ค่าใช้จ่ายพิเศษตามข้อกำหนด', r.special) + bl('ผลต่างระหว่างราคากลางหักค่าใช้จ่ายพิเศษตามข้อกำหนด', r.P1, 'shade') + '</div>' +
+    '<div><div class="bc-title">วิธีการคำนวณราคาตามคำเสนอฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด</div>' + bl('ราคาที่เสนอของผู้ชนะการจัดซื้อจัดจ้าง', r.offer) + bl('<u>หัก</u> ค่าใช้จ่ายพิเศษตามข้อกำหนด', r.special) + bl('ผลต่างระหว่างราคาตามคำเสนอฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด', r.P2, 'shade') + '</div>' +
+    '<div><div class="bc-title">ผลต่างระหว่างราคากลางกับราคาตามคำเสนอฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด</div>' + bl('ผลต่างระหว่างราคากลางหักค่าใช้จ่ายพิเศษตามข้อกำหนด (1)', r.P1) + bl('<u>หัก</u> ผลต่างระหว่างราคาที่เสนอฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด (2)', r.P2) + bl('ผลต่างระหว่างราคากลางกับราคาตามคำเสนอฯ หักค่าใช้จ่ายพิเศษตามข้อกำหนด (3)', r.P3, 'shade') + '</div>' +
+    '<div style="align-self:end"><div class="pct-box"><span>ผลต่างตาม (3) เทียบกับราคากลางหักค่าใช้จ่ายพิเศษตามข้อกำหนด (1)<br>คิดเป็นอัตราร้อยละ</span><span class="v">' + F(r.pct) + '</span></div></div></div>';
+  // detail
+  h += '<table class="rt"><thead><tr><th rowspan="2" style="width:5%">ลำดับที่</th><th rowspan="2">รายการ</th><th rowspan="2" style="width:5%">หน่วย</th><th rowspan="2" style="width:7%">จำนวน</th><th colspan="' + (mk ? 4 : 3) + '">ราคากลางงานก่อสร้าง (บาท)</th><th colspan="2">ราคาที่ปรับลดตามคำเสนอ (บาท)</th></tr>' +
+    '<tr><th style="width:9%">ค่างานต้นทุน</th><th style="width:6%">Factor F / Vat</th><th style="width:9%">ราคากลาง</th>' + (mk ? '<th style="width:9%">ราคากลาง<br>บวกเพิ่ม ร้อยละ ' + mk + '</th>' : '') + '<th style="width:9%">ราคาที่ปรับลด</th><th style="width:8%">ราคาต่อหน่วย</th></tr></thead><tbody>' +
+    reportRows(p, r).map(function (x) {
+      var lab = x.kind === 'SECTOT' ? '<td class="lbl" colspan="1" style="text-align:right">' + esc(x.name) + '</td>' : '<td' + (x.kind === 'H2' ? ' style="padding-left:14px"' : x.kind === 'ITEM' && x.no === '-' ? ' style="padding-left:14px"' : '') + '>' + (x.kind === 'ITEM' && x.no === '-' ? '- ' : '') + esc(x.name) + '</td>';
+      return '<tr class="k-' + x.kind + '"><td class="c">' + (x.no === '-' ? '' : esc(x.no)) + '</td>' + lab + '<td class="c">' + esc(x.unit) + '</td><td class="n">' + F(x.qty) + '</td><td class="n">' + F(x.cost) + '</td><td class="n">' + (x.factor === '' ? '' : Number(x.factor).toFixed(4)) + '</td><td class="n">' + F(x.mid) + '</td>' + (mk ? '<td class="n">' + F(x.midPlus) + '</td>' : '') + '<td class="n">' + F(x.adj) + '</td><td class="n">' + F(x.unitAdj) + '</td></tr>';
+    }).join('') +
+    '<tr><td colspan="' + (mk ? 6 : 6) + '" class="n" style="border:none;border-right:1px solid #333"><b>วงเงินรวม</b></td><td class="n"><b>' + F(r.totalMid) + '</b></td>' + (mk ? '<td class="n"><b>' + F(r.total) + '</b></td>' : '') + '<td class="n shade"><b>' + F(r.sumAdj) + '</b></td><td style="border:none">(*)</td></tr></tbody></table>';
+  h += '<div class="note"><u>หมายเหตุ</u> (*) ส่วนต่างนี้ให้ปรับเพิ่มลด ในรายการใดรายการหนึ่งได้ตามความเหมาะสม ยกเว้น รายการค่าใช้จ่ายพิเศษตามข้อกำหนด ทั้งนี้ วงเงินรวมของการปรับลดราคาจะต้องเท่ากับราคาตามคำเสนอของผู้ชนะการจัดซื้อจัดจ้าง' +
+    (r.target ? '<br>ส่วนต่างจากการปัดเศษ ' + F(r.residual) + ' บาท ปรับในรายการ "' + esc(r.target.name) + '"' : '') + '</div>';
+  h += signHtml([[st.officerName, st.officerPosition, 'ผู้ปรับลดราคา'], [st.checkerName, st.checkerPosition, 'ผู้ตรวจสอบ']]);
+  return h + '</div>';
+}
+function reportContract(p, r, st) {
+  var h = '<div class="paper portrait">' + sampleHead() +
+    '<div class="r-title">แบบแสดงรายการ ปริมาณงาน และราคา</div>' +
+    '<div class="r-center">เอกสารแนบท้ายสัญญาจ้างก่อสร้าง : งานก่อสร้าง' + esc(p.workType && p.workType !== 'อื่น ๆ' ? p.workType : '') + '</div>' +
+    (r.markupPct ? '<div class="r-center">(กรณีราคากลางบวกเพิ่ม ร้อยละ ' + r.markupPct + ')</div>' : '') +
+    '<div class="r-center">เลขที่ ' + esc(p.contractNo || '..........') + ' ลงวันที่ ' + (p.contractDate ? E.thaiDate(p.contractDate) : '....................') + '</div>' +
+    '<div class="r-center">โครงการงานก่อสร้าง ' + esc(p.name) + '  เลขที่โครงการ ' + esc(p.projectNo || '-') + '</div>' +
+    '<div class="info-grid"><div>หน่วยงานเจ้าของโครงการ</div><div>' + esc(p.agency || st.orgName) + '</div>' +
+    '<div>วงเงินงบประมาณ</div><div>' + F(num(p.budget) || 0) + ' บาท</div>' +
+    '<div>ราคากลางงานก่อสร้าง</div><div>' + F(r.total) + ' บาท</div>' +
+    '<div>วงเงินตามสัญญา</div><div>' + F(r.sumAdj) + ' บาท (' + E.bahtText(r.sumAdj) + ')</div>' +
+    '<div>ชื่อผู้รับจ้าง</div><div>' + esc(p.contractor || '') + '</div></div>';
+  h += '<table class="rt"><thead><tr><th rowspan="2" style="width:8%">ลำดับที่</th><th rowspan="2">รายการ</th><th rowspan="2" style="width:8%">หน่วย</th><th rowspan="2" style="width:10%">จำนวน</th><th colspan="2">ราคาที่ปรับลดตามคำเสนอ (บาท)</th></tr><tr><th style="width:15%">ราคา</th><th style="width:13%">ราคาต่อหน่วย</th></tr></thead><tbody>' +
+    reportRows(p, r).map(function (x) {
+      var lab = x.kind === 'SECTOT' ? '<td style="text-align:right">' + esc(x.name) + '</td>' : '<td' + ((x.kind === 'ITEM' && x.no === '-') || x.kind === 'H2' ? ' style="padding-left:14px"' : '') + '>' + (x.kind === 'ITEM' && x.no === '-' ? '- ' : '') + esc(x.name) + '</td>';
+      return '<tr class="k-' + x.kind + '"><td class="c">' + (x.no === '-' ? '' : esc(x.no)) + '</td>' + lab + '<td class="c">' + esc(x.unit) + '</td><td class="n">' + F(x.qty) + '</td><td class="n' + (x.kind === 'SECTOT' ? ' shade' : '') + '">' + F(x.adj) + '</td><td class="n">' + F(x.unitAdj) + '</td></tr>';
+    }).join('') +
+    '<tr><td colspan="4" class="n" style="border:none;border-right:1px solid #333"><b>วงเงินตามสัญญา</b></td><td class="n shade"><b>' + F(r.sumAdj) + '</b></td><td style="border:none"></td></tr></tbody></table>';
+  h += signHtml([[st.headName, st.headPosition, 'ผู้ว่าจ้าง'], [p.contractor, '', 'ผู้รับจ้าง']]);
+  return h + '</div>';
+}
+function exportReport(pdf) {
+  if (!S.cur.project.id || S.dirty) { toast('กรุณาบันทึกโครงการก่อนส่งออก', 'warning'); return; }
+  loading(true);
+  api('apiExportReport', S.cur.project.id, pdf).then(function (o) {
+    loading(false);
+    Swal.fire({ icon: 'success', title: 'ส่งออกเรียบร้อย', confirmButtonColor: '#16603f',
+      html: '<a href="' + o.sheetUrl + '" target="_blank" class="btn btn-success m-1"><i class="bi bi-file-earmark-spreadsheet"></i> เปิด Google Sheets</a>' +
+        (o.pdfUrl ? '<a href="' + o.pdfUrl + '" target="_blank" class="btn btn-danger m-1"><i class="bi bi-file-earmark-pdf"></i> เปิด PDF</a>' : '') +
+        '<a href="' + o.folderUrl + '" target="_blank" class="btn btn-outline-secondary m-1"><i class="bi bi-folder2-open"></i> โฟลเดอร์รายงาน</a>' });
+  }).catch(fail);
+}
+
+/* ---------------------- Settings ---------------------- */
+function renderSettings() {
+  $$('#setForm [data-s]').forEach(function (el) { el.value = S.settings[el.getAttribute('data-s')] || ''; });
+  var a = $('#dbLink'); if (S.dbUrl) { a.href = S.dbUrl; a.classList.remove('disabled'); } else { a.removeAttribute('href'); a.classList.add('disabled'); }
+  $('#verText').textContent = 'เวอร์ชัน ' + (S.version || '');
+}
+function saveSettings() {
+  var o = {}; $$('#setForm [data-s]').forEach(function (el) { o[el.getAttribute('data-s')] = el.value.trim(); });
+  loading(true);
+  api('apiSaveSettings', o).then(function (s) { S.settings = s; $('#orgShort').textContent = s.orgShort || ''; loading(false); toast('บันทึกการตั้งค่าแล้ว'); }).catch(fail);
+}
+
+/* ---------------------- Offline data backup (PWA mode) ---------------------- */
+function backupLocal() {
+  api('apiExportAll').then(function (d) {
+    var blob = new Blob([JSON.stringify(d, null, 1)], { type: 'application/json' });
+    var a = document.createElement('a'), t = new Date();
+    a.href = URL.createObjectURL(blob);
+    a.download = 'boq-w651-backup-' + t.getFullYear() + ('0' + (t.getMonth() + 1)).slice(-2) + ('0' + t.getDate()).slice(-2) + '.json';
+    document.body.appendChild(a); a.click(); setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    toast('บันทึกไฟล์สำรองแล้ว (' + Object.keys(d.projects).length + ' โครงการ)');
+  }).catch(fail);
+}
+function restoreLocal(e) {
+  var f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  var rd = new FileReader();
+  rd.onload = function () {
+    var d; try { d = JSON.parse(rd.result); } catch (err) { fail(new Error('อ่านไฟล์ไม่ได้ — ไฟล์ต้องเป็น .json ที่ได้จากปุ่ม "สำรองข้อมูล"')); return; }
+    var n = d && d.projects ? Object.keys(d.projects).length : 0;
+    confirmBox('นำเข้าข้อมูลสำรอง?', 'ข้อมูลปัจจุบันในเครื่องนี้จะถูกแทนที่ด้วยไฟล์สำรอง (' + n + ' โครงการ)', true).then(function (ok) {
+      if (!ok) return;
+      api('apiImportAll', d).then(function (list) { S.projects = list; S.cur = null; S.dirty = false; return api('apiInit'); })
+        .then(function (i) { S.settings = i.settings; $('#orgShort').textContent = i.settings.orgShort || ''; toast('นำเข้าข้อมูลแล้ว'); showTab('dash'); }).catch(fail);
+    });
+  };
+  rd.readAsText(f);
+}
+function resetLocal() {
+  confirmBox('ล้างโครงการทั้งหมดในเครื่องนี้?', 'ควรสำรองข้อมูลก่อน การล้างนี้ย้อนกลับไม่ได้ (การตั้งค่าผู้ลงนามยังคงอยู่)', true).then(function (ok) {
+    if (!ok) return;
+    api('apiResetAll').then(function (list) { S.projects = list; S.cur = null; S.dirty = false; toast('ล้างข้อมูลแล้ว'); showTab('dash'); }).catch(fail);
+  });
+}
+
+/* ---------------------- Install as app (PWA) ---------------------- */
+function setupInstall() {
+  var btn = $('#btnInstall'); if (!btn || IS_GAS) return;
+  var standalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone;
+  if (standalone) return;
+  var deferred = null;
+  window.addEventListener('beforeinstallprompt', function (e) { e.preventDefault(); deferred = e; btn.classList.remove('d-none'); });
+  window.addEventListener('appinstalled', function () { btn.classList.add('d-none'); toast('ติดตั้งแอปเรียบร้อย เปิดได้จากหน้าจอหลัก/เมนูโปรแกรม'); });
+  var isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (isIOS && 'serviceWorker' in navigator) btn.classList.remove('d-none');
+  btn.addEventListener('click', function () {
+    if (deferred) { deferred.prompt(); deferred.userChoice.then(function () { deferred = null; btn.classList.add('d-none'); }); return; }
+    Swal.fire({ icon: 'info', title: 'ติดตั้งบน iPhone / iPad', confirmButtonColor: '#16603f',
+      html: 'เปิดหน้านี้ใน <b>Safari</b> แล้วแตะปุ่ม <b>แชร์</b> <i class="bi bi-box-arrow-up"></i><br>เลือก <b>"เพิ่มไปยังหน้าจอโฮม"</b> (Add to Home Screen)' });
+  });
+}
+</script>
