@@ -108,7 +108,7 @@ document.addEventListener('DOMContentLoaded', function () {
   bindStatic();
   api('apiInit').then(function (d) {
     S.user = d.user; S.settings = d.settings; S.projects = d.projects; S.dbUrl = d.dbUrl; S.version = d.version;
-    $('#userEmail').textContent = d.user; $('#orgShort').textContent = d.settings.orgShort || '';
+    $('#userEmail').textContent = d.user; 
     loading(false); showTab('dash');
     if (location.hash === '#new') { newProject(); try { history.replaceState(null, '', location.pathname); } catch (e) { /* ignore */ } }
     $$('.gas-only').forEach(function (el) { el.classList.toggle('d-none', !IS_GAS); });
@@ -723,7 +723,7 @@ function renderSettings() {
 function saveSettings() {
   var o = {}; $$('#setForm [data-s]').forEach(function (el) { o[el.getAttribute('data-s')] = el.value.trim(); });
   loading(true);
-  api('apiSaveSettings', o).then(function (s) { S.settings = s; $('#orgShort').textContent = s.orgShort || ''; loading(false); toast('บันทึกการตั้งค่าแล้ว'); }).catch(fail);
+  api('apiSaveSettings', o).then(function (s) { S.settings = s; loading(false); toast('บันทึกการตั้งค่าแล้ว'); }).catch(fail);
 }
 
 /* ---------------------- Offline data backup (PWA mode) ---------------------- */
@@ -746,7 +746,7 @@ function restoreLocal(e) {
     confirmBox('นำเข้าข้อมูลสำรอง?', 'ข้อมูลปัจจุบันในเครื่องนี้จะถูกแทนที่ด้วยไฟล์สำรอง (' + n + ' โครงการ)', true).then(function (ok) {
       if (!ok) return;
       api('apiImportAll', d).then(function (list) { S.projects = list; S.cur = null; S.dirty = false; return api('apiInit'); })
-        .then(function (i) { S.settings = i.settings; $('#orgShort').textContent = i.settings.orgShort || ''; toast('นำเข้าข้อมูลแล้ว'); showTab('dash'); }).catch(fail);
+        .then(function (i) { S.settings = i.settings; toast('นำเข้าข้อมูลแล้ว'); showTab('dash'); }).catch(fail);
     });
   };
   rd.readAsText(f);
