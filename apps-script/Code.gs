@@ -10,8 +10,8 @@
 var APP = {
   NAME: 'ระบบปรับลดราคา BOQ (ว 651)',
   VERSION: '1.1.0',
-  // ไอคอนแท็บเบราว์เซอร์: เปลี่ยน <user>/<repo> ให้ตรงกับ GitHub ของคุณ (ไฟล์ web/icons/icon-64.png)
-  ICON_URL: 'https://cdn.jsdelivr.net/gh/<user>/<repo>@main/web/icons/icon-64.png',
+  // ไอคอนแท็บเบราว์เซอร์: เปลี่ยน THARATEP/w615 ให้ตรงกับ GitHub ของคุณ (ไฟล์ web/icons/icon-64.png)
+  ICON_URL: 'https://cdn.jsdelivr.net/gh/THARATEP/w615@main/web/icons/icon-64.png',
   SHEETS: {
     PROJECTS: 'Projects',
     ITEMS: 'Items',

@@ -62,7 +62,7 @@
 ## 1) อัปโหลดขึ้น GitHub
 
 **วิธีที่ 1: ผ่านหน้าเว็บ (ไม่ต้องใช้คำสั่ง)**
-1. ไปที่ github.com แล้วกด **New repository** ตั้งชื่อ เช่น `boq-w651` เลือก **Public** แล้วกด Create
+1. ไปที่ github.com แล้วกด **New repository** ตั้งชื่อ `w615` เลือก **Public** แล้วกด Create
 2. กด **uploading an existing file** แล้วลากไฟล์และโฟลเดอร์ทั้งหมดในโปรเจกต์นี้ลงไป (รวมโฟลเดอร์ `.github`)
 3. กด **Commit changes**
 
@@ -74,7 +74,7 @@ git init
 git add .
 git commit -m "ระบบปรับลดราคา BOQ ตาม ว 651"
 git branch -M main
-git remote add origin https://github.com/<user>/boq-w651.git
+git remote add origin https://github.com/THARATEP/w615.git
 git push -u origin main
 ```
 
@@ -83,7 +83,7 @@ git push -u origin main
 1. ใน repository ไปที่ **Settings → Pages**
 2. ที่หัวข้อ **Build and deployment → Source** ให้เลือก **GitHub Actions**
 3. ไปที่แท็บ **Actions** แล้วรอให้ขั้นตอน *Test & Deploy PWA* ขึ้นเครื่องหมายถูกสีเขียว (ประมาณ 1 นาที)
-4. แอปจะอยู่ที่ `https://<user>.github.io/boq-w651/`
+4. แอปจะอยู่ที่ `https://tharatep.github.io/w615/`
 
 ## 3) ติดตั้งลงเครื่อง
 
@@ -112,7 +112,7 @@ git push -u origin main
    - ดำเนินการในฐานะ: **ฉัน**
    - ผู้มีสิทธิ์เข้าถึง: เลือกตามที่หน่วยงานกำหนด
 6. (ไม่บังคับ) แก้ `ICON_URL` ในไฟล์ `Code.gs` เป็น
-   `https://cdn.jsdelivr.net/gh/<user>/boq-w651@main/web/icons/icon-64.png`
+   `https://cdn.jsdelivr.net/gh/THARATEP/w615@main/web/icons/icon-64.png`
    เพื่อให้แท็บเบราว์เซอร์แสดงไอคอนของแอป
 
 **วิธีที่ 2: ใช้ clasp (สำหรับนักพัฒนา)**
