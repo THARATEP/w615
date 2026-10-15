@@ -375,8 +375,7 @@ var NUM = '#,##0.00';
 function setTitleRows_(sh, lines, width) {
   lines.forEach(function (t, i) {
     var r = sh.getRange(i + 1, 1, 1, width).merge().setValue(t).setHorizontalAlignment('center');
-    if (i === 0) r.setFontStyle('italic').setFontLine('underline');
-    if (i === 1) r.setFontWeight('bold').setFontSize(13);
+    if (i === 0) r.setFontWeight('bold').setFontSize(13);
   });
   return lines.length + 1;
 }
@@ -390,8 +389,8 @@ function writeSummarySheet_(sh, p, res, st) {
   var mk = res.markupPct;
   var W = mk ? 10 : 9;
   sh.getRange('A:Z').setFontFamily('Sarabun').setFontSize(10);
-  var lines = ['ตัวอย่างตามหนังสือ ว 651', 'แบบสรุปราคากลางงานก่อสร้าง' + (p.workType ? p.workType : '')];
-  if (mk) lines.push('(กรณีราคากลางบวกเพิ่ม ร้อยละ ' + mk + ')');
+  var lines = ['แบบสรุปราคากลางงานก่อสร้าง' + workTypeText_(p)];
+  if (mk) lines.push('(กรณีงานก่อสร้างใน 3 จังหวัดชายแดนภาคใต้ ได้แก่ จังหวัดยะลา จังหวัดปัตตานี และจังหวัดนราธิวาส)');
   lines.push('โครงการ ' + (p.name || '') + '  งบประมาณ ' + fmt_(p.budget) + ' บาท  เลขที่โครงการ ' + (p.projectNo || '-'));
   var r = setTitleRows_(sh, lines, W);
 
@@ -502,10 +501,11 @@ function writeSummarySheet_(sh, p, res, st) {
 function writeContractSheet_(sh, p, res, st) {
   sh.getRange('A:Z').setFontFamily('Sarabun').setFontSize(10);
   var W = 6;
-  var r = setTitleRows_(sh, ['ตัวอย่างตามหนังสือ ว 651', 'แบบแสดงรายการ ปริมาณงาน และราคา',
-    'เอกสารแนบท้ายสัญญาจ้างก่อสร้าง : ' + (p.workType ? 'งานก่อสร้าง' + p.workType : 'งานก่อสร้าง'),
-    'เลขที่ ' + (p.contractNo || '..........') + '  ลงวันที่ ' + thaiDate_(p.contractDate),
-    'โครงการ ' + (p.name || '') + '  เลขที่โครงการ ' + (p.projectNo || '-')], W);
+  var tl = ['แบบแสดงรายการ ปริมาณงาน และราคา', 'เอกสารแนบท้ายสัญญาจ้างก่อสร้าง : งานก่อสร้าง' + workTypeText_(p)];
+  if (res.markupPct) tl.push('(กรณีงานก่อสร้างใน 3 จังหวัดชายแดนภาคใต้ ได้แก่ จังหวัดยะลา จังหวัดปัตตานี และจังหวัดนราธิวาส)');
+  tl.push('เลขที่ ' + (p.contractNo || '..........') + '  ลงวันที่ ' + thaiDate_(p.contractDate),
+    'โครงการ ' + (p.name || '') + '  เลขที่โครงการ ' + (p.projectNo || '-'));
+  var r = setTitleRows_(sh, tl, W);
   var info = [['หน่วยงานเจ้าของโครงการ', p.agency || st.orgName],
     ['วงเงินงบประมาณ', fmt_(p.budget) + ' บาท'],
     ['ราคากลางงานก่อสร้าง', fmt_(res.total) + ' บาท'],
@@ -540,6 +540,8 @@ function writeContractSheet_(sh, p, res, st) {
   signBlock_(sh, r, [[st.headName, st.headPosition, 'ผู้ว่าจ้าง'], [p.contractor, '', 'ผู้รับจ้าง']], W);
   colWidths_(sh, [55, 380, 60, 80, 120, 110]);
 }
+
+function workTypeText_(p) { return p.workType && p.workType !== 'อื่น ๆ' ? p.workType : ''; }
 
 function signBlock_(sh, r, people, nc) {
   var half = Math.max(1, Math.floor(nc / 2));

@@ -506,6 +506,7 @@ function legalCheck(p, r) {
     o.level = 'danger'; o.title = 'สูงกว่าราคากลางและวงเงินที่จะจ้าง';
     o.short = 'ต้องต่อรองราคาก่อน (ข้อ 1.2.4 (2)) — ระบุผลการต่อรองในหน้าผลการปรับลดราคา';
     if (ci.nego === 'below') { o.level = 'warning'; o.title = 'ต่อรองแล้ว: ลดต่ำกว่าราคากลาง (ข้อ 1.2.4 (2.1))'; o.short = 'ให้แก้ไข "ราคาตามคำเสนอ" เป็นราคาหลังต่อรอง แล้วปรับลดตามข้อ 1.2.2'; }
+    if (ci.nego === 'equal') { o.level = 'warning'; o.title = 'ต่อรองแล้ว: ลดเท่ากับราคากลางและวงเงินที่จะจ้าง (ข้อ 1.2.4 (2.2))'; o.short = 'ให้แก้ไข "ราคาตามคำเสนอ" เป็นราคาหลังต่อรอง แล้วลงนามในสัญญาตามข้อ 1.2.3'; }
     if (ci.nego === 'refuse') { o.title = 'ยกเลิกการจัดซื้อจัดจ้าง (ข้อ 1.2.4 (2.3))'; o.short = 'ผู้ชนะไม่ยอมลดราคา หรือลดแล้วยังสูงกว่าวงเงินที่จะจ้าง'; }
     o.clause = 'ข้อ 1.2.4 (2)';
   } else if (overMid && !overBudget) {
@@ -566,7 +567,7 @@ function renderCalc() {
     opt('trunc', 'ทศนิยม 2 ตำแหน่ง ตัดเศษทิ้ง (ตามตัวอย่าง ว 651)', p.pctMode) + opt('round', 'ทศนิยม 2 ตำแหน่ง ปัดเศษ', p.pctMode) + opt('exact', 'ใช้อัตราจริง ไม่ปัดเศษ', p.pctMode) + '</select></div>' +
     '<div class="col-md-6"><label class="form-label">ราคาที่ปรับลดแต่ละรายการ (สตางค์)</label><select class="form-select form-select-sm" id="optAdj">' +
     opt('trunc', 'ตัดเศษสตางค์ทิ้ง (ตามตัวอย่าง ว 651)', p.adjRound) + opt('round', 'ปัดเศษสตางค์', p.adjRound) + '</select></div>' +
-    '<div class="col-12"><label class="form-label">นำส่วนต่างจากการปัดเศษ <b class="text-danger">' + F(r.residual) + '</b> บาท ไปปรับในรายการ (หมายเหตุ (*) ห้ามใช้รายการค่าใช้จ่ายพิเศษ)</label>' +
+    '<div class="col-12"><label class="form-label">นำส่วนต่างจากการปัดเศษ <b class="text-danger">' + F(r.residual) + '</b> บาท ไปปรับในรายการ (ตามหมายเหตุ (*) ยกเว้นรายการค่าใช้จ่ายพิเศษตามข้อกำหนด)</label>' +
     '<select class="form-select form-select-sm" id="optTarget"><option value="">อัตโนมัติ — รายการที่มีราคากลางสูงสุด (ตามตัวอย่าง ว 651)</option>' +
     itemsAdj.map(function (x) { return '<option value="' + esc(x.id) + '"' + (String(p.residualId) === String(x.id) ? ' selected' : '') + '>' + esc((x.no && x.no !== '-' ? x.no + ' ' : '') + x.name) + ' — ' + F(x.base) + '</option>'; }).join('') + '</select></div></div>' +
     '<div class="small mt-2 text-muted">สูตร: ราคาที่ปรับลด = ราคากลางรายการ × (1 − ร้อยละ/100) ; ราคาต่อหน่วย = ราคาที่ปรับลด ÷ จำนวน ; ส่วนต่างสะสมปรับเข้ารายการที่เลือก เพื่อให้วงเงินรวมเท่ากับราคาตามคำเสนอพอดี</div></div></div>' +
@@ -650,7 +651,7 @@ function reportSummary(p, r, st) {
   var mk = r.markupPct;
   var h = '<div class="paper landscape">' + sampleHead() +
     '<div class="r-title">แบบสรุปราคากลางงานก่อสร้าง' + esc(p.workType && p.workType !== 'อื่น ๆ' ? p.workType : '') + '</div>' +
-    (mk ? '<div class="r-center">(กรณีราคากลางบวกเพิ่ม ร้อยละ ' + mk + ')</div>' : '') +
+    (mk ? '<div class="r-center">(กรณีงานก่อสร้างใน 3 จังหวัดชายแดนภาคใต้ ได้แก่ จังหวัดยะลา จังหวัดปัตตานี และจังหวัดนราธิวาส)</div>' : '') +
     '<div class="r-center">โครงการงานก่อสร้าง ' + esc(p.name) + '  งบประมาณ ' + F(num(p.budget) || 0) + ' บาท  เลขที่โครงการ ' + esc(p.projectNo || '-') + '</div>';
   // table 1
   h += '<div class="mt-2"><b>ตาราง :</b> สรุปราคากลางโครงการงานก่อสร้าง ' + esc(p.name) + '</div><table class="rt"><thead><tr><th style="width:8%">ลำดับที่</th><th>รายการ</th><th style="width:7%">หน่วย</th><th style="width:14%">ค่างานต้นทุน</th><th style="width:11%">Factor F / Vat</th><th style="width:14%">ราคากลาง</th>' + (mk ? '<th style="width:14%">ราคากลาง<br>บวกเพิ่ม ร้อยละ ' + mk + '</th>' : '') + '</tr></thead><tbody>' +
@@ -685,7 +686,7 @@ function reportContract(p, r, st) {
   var h = '<div class="paper portrait">' + sampleHead() +
     '<div class="r-title">แบบแสดงรายการ ปริมาณงาน และราคา</div>' +
     '<div class="r-center">เอกสารแนบท้ายสัญญาจ้างก่อสร้าง : งานก่อสร้าง' + esc(p.workType && p.workType !== 'อื่น ๆ' ? p.workType : '') + '</div>' +
-    (r.markupPct ? '<div class="r-center">(กรณีราคากลางบวกเพิ่ม ร้อยละ ' + r.markupPct + ')</div>' : '') +
+    (r.markupPct ? '<div class="r-center">(กรณีงานก่อสร้างใน 3 จังหวัดชายแดนภาคใต้ ได้แก่ จังหวัดยะลา จังหวัดปัตตานี และจังหวัดนราธิวาส)</div>' : '') +
     '<div class="r-center">เลขที่ ' + esc(p.contractNo || '..........') + ' ลงวันที่ ' + (p.contractDate ? E.thaiDate(p.contractDate) : '....................') + '</div>' +
     '<div class="r-center">โครงการงานก่อสร้าง ' + esc(p.name) + '  เลขที่โครงการ ' + esc(p.projectNo || '-') + '</div>' +
     '<div class="info-grid"><div>หน่วยงานเจ้าของโครงการ</div><div>' + esc(p.agency || st.orgName) + '</div>' +
